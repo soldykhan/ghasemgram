@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>قاسم‌گرام</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='12' fill='%232AABEE'/%3E%3Cpath d='M5.5 12.2l11-4.7c.5-.2 1 .3.8.8l-2.4 8.3c-.1.5-.7.6-1.1.3l-2.7-2-1.6 1.6c-.3.3-.9.2-1-.3l-.8-3-2.2-.6c-.5-.2-.5-.9 0-1.1z' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <!-- ═══ صفحه ورود / ثبت‌نام ═══ -->
+  <div id="auth-screen" class="auth-screen hidden">
+    <div class="auth-card">
+      <div class="auth-logo">
+        <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+      </div>
+      <h1 class="auth-title">قاسم‌گرام</h1>
+      <p class="auth-sub">پیام‌رسان سریع و ساده</p>
+
+      <div class="auth-tabs">
+        <button type="button" id="tab-login" class="active">ورود</button>
+        <button type="button" id="tab-register">ثبت‌نام</button>
+      </div>
+
+      <form id="login-form" autocomplete="on">
+        <input id="login-username" name="username" placeholder="نام کاربری" required autocomplete="username">
+        <input id="login-password" name="password" type="password" placeholder="رمز عبور" required autocomplete="current-password">
+        <button type="submit" class="btn-primary">ورود به حساب</button>
+      </form>
+
+      <form id="register-form" class="hidden" autocomplete="off">
+        <div class="avatar-pick" id="reg-avatar-wrap" title="انتخاب عکس پروفایل">
+          <span id="reg-avatar-preview">
+            <svg viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 10-3.2-3.2 3.2 3.2 0 003.2 3.2zM9 3L7.17 5H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V7a2 2 0 00-2-2h-3.17L15 3zm3 15a5 5 0 115-5 5 5 0 01-5 5z"/></svg>
+          </span>
+        </div>
+        <input type="file" id="reg-avatar-input" accept="image/*" class="hidden">
+        <input id="reg-username" placeholder="نام کاربری (a-z، 0-9، _)" required>
+        <input id="reg-display" placeholder="نام نمایشی" required>
+        <input id="reg-password" type="password" placeholder="رمز عبور (حداقل ۶ کاراکتر)" required>
+        <button type="submit" class="btn-primary">ساخت حساب</button>
+      </form>
+
+      <div id="auth-error" class="auth-error hidden"></div>
+    </div>
+  </div>
+
+  <!-- ═══ اپلیکیشن اصلی ═══ -->
+  <div id="app-screen" class="app hidden">
+
+    <aside class="sidebar">
+      <div class="sidebar-top">
+        <button id="menu-btn" class="icon-btn" title="منو">
+          <svg viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+        </button>
+        <div class="search-box">
+          <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 10-.7.7l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1114 9.5 4.5 4.5 0 019.5 14z"/></svg>
+          <input id="search-input" placeholder="جستجوی گفتگوها و پیام‌ها...">
+        </div>
+
+        <div id="menu-dropdown" class="menu-dropdown hidden">
+          <button id="menu-saved">
+            <svg viewBox="0 0 24 24"><path d="M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2z"/></svg>
+            پیام‌های ذخیره‌شده
+          </button>
+          <button id="menu-theme">
+            <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 109 9c0-.46-.04-.92-.1-1.36a5.389 5.389 0 01-4.4 2.26 5.403 5.403 0 01-3.14-9.8c-.44-.06-.9-.1-1.36-.1z"/></svg>
+            <span id="theme-btn-text">حالت شب</span>
+          </button>
+          <button id="menu-wallpaper">
+            <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zm-5.04-6.71l-2.75 3.54-1.96-2.36L6.5 17h11l-3.54-4.71z"/></svg>
+            پس‌زمینه چت
+          </button>
+          <button id="menu-join">
+            <svg viewBox="0 0 24 24"><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg>
+            عضویت با لینک دعوت
+          </button>
+          <button id="menu-profile">
+            <svg viewBox="0 0 24 24"><path d="M12 12a4.5 4.5 0 10-4.5-4.5A4.5 4.5 0 0012 12zm0 2.2c-3 0-9 1.5-9 4.5V21h18v-2.3c0-3-6-4.5-9-4.5z"/></svg>
+            پروفایل من
+          </button>
+          <button id="menu-logout">
+            <svg viewBox="0 0 24 24"><path d="M10.09 15.59L11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67zM19 3H5a2 2 0 00-2 2v4h2V5h14v14H5v-4H3v4a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2z"/></svg>
+            خروج از حساب
+          </button>
+        </div>
+      </div>
+
+      <!-- پوشه‌ها و تب‌های گفتگوها -->
+      <div class="chat-tabs" id="chat-tabs">
+        <button class="chat-tab active" data-tab="all">همه</button>
+        <button class="chat-tab" data-tab="private">شخصی</button>
+        <button class="chat-tab" data-tab="group">گروه‌ها</button>
+        <button class="chat-tab" data-tab="channel">کانال‌ها</button>
+        <button class="chat-tab" data-tab="unread">خوانده‌نشده</button>
+      </div>
+
+      <div class="sidebar-scroll">
+        <div id="chat-list"></div>
+      </div>
+
+      <button id="fab" class="fab" title="گفتگوی جدید">
+        <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75zM20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75z"/></svg>
+      </button>
+      <div id="fab-menu" class="fab-menu hidden">
+        <button id="fab-group">
+          <svg viewBox="0 0 24 24"><path d="M16 11a3 3 0 10-3-3 3 3 0 003 3zm-8 0a3 3 0 10-3-3 3 3 0 003 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 14.17 10.33 13 8 13zm8 0c-.29 0-.62.02-.97.05A4.22 4.22 0 0117 16.5V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+          گروه جدید
+        </button>
+        <button id="fab-channel">
+          <svg viewBox="0 0 24 24"><path d="M18 11v2h4v-2zm-2 6.61c.96.71 2.21 1.65 3.2 2.39.4-.53.8-1.07 1.2-1.6-.99-.74-2.24-1.68-3.2-2.4zM20.4 5.6c-.4-.53-.8-1.07-1.2-1.6-.99.74-2.24 1.68-3.2 2.4.4.53.8 1.07 1.2 1.6zM4 9a2 2 0 00-2 2v2a2 2 0 002 2h1v4h2v-4h1l5 3V6L8 9zm11.5 3c0-1.33-.58-2.53-1.5-3.35v6.69a4.22 4.22 0 001.5-3.34z"/></svg>
+          کانال جدید
+        </button>
+      </div>
+
+      <div class="profile-chip" id="profile-chip" title="پروفایل من"></div>
+    </aside>
+
+    <!-- ═══ کشوی تنظیمات کاربر (طرح مدرن تلگرام مشابه تصویر) ═══ -->
+    <div id="settings-drawer" class="settings-drawer hidden">
+      <div class="settings-drawer-backdrop" id="settings-backdrop"></div>
+      <div class="settings-drawer-content">
+        <!-- هدر با گرادیانت و پترن تلگرامی -->
+        <div class="settings-hero">
+          <div class="settings-hero-top">
+            <button id="settings-close-btn" class="settings-pill-btn" title="بستن">
+              <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            </button>
+            <div class="settings-hero-actions">
+              <button id="settings-qr-btn" class="settings-pill-btn" title="کد QR">
+                <svg viewBox="0 0 24 24"><path d="M3 3h8v8H3zm2 2v4h4V5zm8-2h8v8h-8zm2 2v4h4V5zM3 13h8v8H3zm2 2v4h4v-4zm13-2h3v2h-3zm-3 2h3v3h-3zm3 3h3v3h-3zm-3 3h3v2h-3zm6-5h2v6h-2zm-6-2h2v2h-2z"/></svg>
+              </button>
+              <button id="settings-edit-profile-btn" class="settings-pill-btn edit-pill" title="ویرایش پروفایل">
+                <span>ویرایش</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="settings-avatar-wrap">
+            <div class="settings-avatar" id="settings-avatar"></div>
+          </div>
+
+          <div class="settings-name-row">
+            <span class="settings-name" id="settings-name"></span>
+            <span class="settings-star" title="کاربر ویژه">★</span>
+          </div>
+
+          <div class="settings-meta-pill">
+            <span class="settings-uname" id="settings-uname">@username</span>
+          </div>
+
+          <div class="settings-bio-banner" id="settings-bio-banner">
+            <span class="bio-icon">🎵</span>
+            <span class="bio-text" id="settings-bio-text">بیوگرافی کاربر</span>
+            <span class="bio-arrow">‹</span>
+          </div>
+        </div>
+
+        <!-- کارت‌های گروهی گوشه‌گرد با آیکون‌های رنگی با زمینه سالید -->
+        <div class="settings-body">
+          <!-- گروه ۱ -->
+          <div class="settings-card-group">
+            <div class="settings-item" id="item-profile">
+              <div class="item-icon-squircle red-bg">
+                <svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+              </div>
+              <span class="item-title">پروفایل من</span>
+              <span class="item-arrow">‹</span>
+            </div>
+          </div>
+
+          <!-- گروه ۲ -->
+          <div class="settings-card-group">
+            <div class="settings-item" id="item-saved">
+              <div class="item-icon-squircle royal-bg">
+                <svg viewBox="0 0 24 24"><path d="M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2z"/></svg>
+              </div>
+              <span class="item-title">پیام‌های ذخیره‌شده</span>
+              <span class="item-arrow">‹</span>
+            </div>
+            <div class="settings-item" id="item-notifications">
+              <div class="item-icon-squircle green-bg">
+                <svg viewBox="0 0 24 24"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+              </div>
+              <span class="item-title">اعلان‌ها و صداها</span>
+              <span class="item-arrow">‹</span>
+            </div>
+            <div class="settings-item" id="item-devices">
+              <div class="item-icon-squircle orange-bg">
+                <svg viewBox="0 0 24 24"><path d="M4 6h16v10H4zm16 12a2 2 0 002-2V6a2 2 0 00-2-2H4a2 2 0 00-2 2v10a2 2 0 002 2H0v2h24v-2z"/></svg>
+              </div>
+              <span class="item-title">دستگاه‌های متصل</span>
+              <span class="item-arrow">‹</span>
+            </div>
+            <div class="settings-item" id="item-folders">
+              <div class="item-icon-squircle purple-bg">
+                <svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+              </div>
+              <span class="item-title">پوشه‌های گفتگو</span>
+              <span class="item-arrow">‹</span>
+            </div>
+          </div>
+
+          <!-- گروه ۳ -->
+          <div class="settings-card-group">
+            <div class="settings-item" id="item-theme">
+              <div class="item-icon-squircle cyan-bg">
+                <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 109 9c0-.46-.04-.92-.1-1.36a5.389 5.389 0 01-4.4 2.26 5.403 5.403 0 01-3.14-9.8c-.44-.06-.9-.1-1.36-.1z"/></svg>
+              </div>
+              <span class="item-title">حالت شب و پس‌زمینه</span>
+              <span class="item-value" id="settings-theme-value">حالت شب</span>
+              <span class="item-arrow">‹</span>
+            </div>
+            <div class="settings-item" id="item-privacy">
+              <div class="item-icon-squircle indigo-bg">
+                <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+              </div>
+              <span class="item-title">حریم خصوصی و امنیت</span>
+              <span class="item-arrow">‹</span>
+            </div>
+            <div class="settings-item" id="item-blocked">
+              <div class="item-icon-squircle crimson-bg">
+                <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8 0-1.85.63-3.55 1.69-4.9L16.9 18.31C15.55 19.37 13.85 20 12 20zm6.31-3.1L7.1 5.69C8.45 4.63 10.15 4 12 4c4.42 0 8 3.58 8 8 0 1.85-.63 3.55-1.69 4.9z"/></svg>
+              </div>
+              <span class="item-title">کاربران مسدودشده</span>
+              <span class="item-arrow">‹</span>
+            </div>
+            <div class="settings-item danger-item" id="item-logout">
+              <div class="item-icon-squircle red-bg">
+                <svg viewBox="0 0 24 24"><path d="M10.09 15.59L11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67zM19 3H5a2 2 0 00-2 2v4h2V5h14v14H5v-4H3v4a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2z"/></svg>
+              </div>
+              <span class="item-title">خروج از حساب کاربری</span>
+              <span class="item-arrow">‹</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <main class="chat-pane" id="chat-pane">
+      <div id="empty-state" class="empty-state">
+        <div class="empty-logo">
+          <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+        </div>
+        <p>یک گفتگو را از فهرست انتخاب کنید<br><span>یا با جستجوی نام کاربری، چت جدیدی بسازید</span></p>
+      </div>
+
+      <div id="chat-view" class="chat-view hidden">
+        <header class="chat-header">
+          <button id="back-btn" class="icon-btn mobile-only">
+            <svg viewBox="0 0 24 24"><path d="M7.99 11H21v2H7.99l4.71 4.71-1.41 1.41L4.17 12l7.12-7.12 1.41 1.41z" transform="scale(-1,1) translate(-24,0)"/></svg>
+          </button>
+          <div class="chat-header-info" id="chat-header-info" title="اطلاعات گفتگو"></div>
+          <div class="chat-header-actions">
+            <button id="chat-search-btn" class="icon-btn" title="جستجو در گفتگو">
+              <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 10-.7.7l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1114 9.5 4.5 4.5 0 019.5 14z"/></svg>
+            </button>
+          </div>
+        </header>
+
+        <!-- نوار پیام سنجاق‌شده -->
+        <div id="pinned-bar" class="pinned-bar hidden">
+          <div class="pinned-bar-icon">
+            <svg viewBox="0 0 24 24"><path d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z"/></svg>
+          </div>
+          <div class="pinned-bar-content" id="pinned-bar-content"></div>
+          <button id="pinned-bar-close" class="icon-btn sm" title="برداشتن سنجاق">✕</button>
+        </div>
+
+        <!-- نوار تاپیک‌های گروه -->
+        <div id="topic-bar" class="topic-bar hidden"></div>
+
+        <div id="chat-search-bar" class="chat-search-bar hidden">
+          <svg class="cs-icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 10-.7.7l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1114 9.5 4.5 4.5 0 019.5 14z"/></svg>
+          <input id="chat-search-input" placeholder="جستجو در این گفتگو..." autocomplete="off">
+          <span id="chat-search-count" class="chat-search-count"></span>
+          <button id="chat-search-prev" class="icon-btn sm" title="پیام قبلی">
+            <svg viewBox="0 0 24 24"><path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></svg>
+          </button>
+          <button id="chat-search-next" class="icon-btn sm" title="پیام بعدی">
+            <svg viewBox="0 0 24 24"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>
+          </button>
+          <button id="chat-search-close" class="icon-btn sm" title="بستن جستجو">
+            <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          </button>
+        </div>
+
+        <div class="messages" id="messages"></div>
+
+        <div id="mention-popup" class="mention-popup hidden"></div>
+        <div id="reply-bar" class="reply-bar hidden"></div>
+        <div id="edit-bar" class="edit-bar hidden"></div>
+        <div id="attach-bar" class="attach-bar hidden"></div>
+        <div id="record-bar" class="record-bar hidden"></div>
+        <div id="media-drawer" class="media-drawer hidden"></div>
+
+        <footer class="composer" id="composer">
+          <div class="composer-actions-left">
+            <button id="attach-btn" class="icon-btn" title="پیوست فایل یا نظرسنجی">
+              <svg viewBox="0 0 24 24"><path d="M16.5 6v11.5a4.5 4.5 0 11-9 0V5a3 3 0 116 0v10.5a1.5 1.5 0 11-3 0V6H9v9.5a3 3 0 106 0V5a4.5 4.5 0 10-9 0v12.5a6 6 0 1012 0V6z"/></svg>
+            </button>
+            <button id="emoji-btn" class="icon-btn" title="ایموجی، استیکر و گیف">
+              <svg viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg>
+            </button>
+          </div>
+
+          <textarea id="msg-input" rows="1" placeholder="پیام..."></textarea>
+
+          <div class="composer-actions-right">
+            <button id="voice-btn" class="icon-btn" title="ضبط پیام صوتی">
+              <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>
+            </button>
+            <button id="send-btn" class="send-btn" title="ارسال پیام">
+              <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+            </button>
+          </div>
+        </footer>
+        <div id="channel-notice" class="channel-notice hidden">فقط مدیران می‌توانند در کانال پیام منتشر کنند</div>
+
+        <input type="file" id="file-input" class="hidden">
+      </div>
+
+      <!-- ═══ پنل اطلاعات گفتگو ═══ -->
+      <div id="info-pane" class="info-pane hidden">
+        <header class="info-header">
+          <button id="info-back" class="icon-btn">
+            <svg viewBox="0 0 24 24"><path d="M7.99 11H21v2H7.99l4.71 4.71-1.41 1.41L4.17 12l7.12-7.12 1.41 1.41z" transform="scale(-1,1) translate(-24,0)"/></svg>
+          </button>
+          <h3>اطلاعات گفتگو</h3>
+        </header>
+
+        <div class="info-nav-tabs">
+          <button class="info-tab-btn active" id="tab-btn-details">مشخصات</button>
+          <button class="info-tab-btn" id="tab-btn-media">رسانه‌های اشتراکی</button>
+        </div>
+
+        <div class="info-scroll" id="info-tab-content-details">
+          <div class="info-hero" id="info-hero"></div>
+          <div class="info-about hidden" id="info-about"></div>
+          <div class="info-actions" id="info-actions"></div>
+          <div id="info-invite-box"></div>
+          <div id="info-members-box">
+            <div class="info-label" id="info-members-label"></div>
+            <div class="info-members" id="info-members"></div>
+          </div>
+          <div class="info-danger" id="info-danger"></div>
+        </div>
+
+        <div class="info-scroll hidden" id="info-tab-content-media">
+          <div class="shared-media-subtabs">
+            <button class="sm-tab active" data-type="photos_videos">عکس و فیلم</button>
+            <button class="sm-tab" data-type="files">فایل‌ها</button>
+            <button class="sm-tab" data-type="audio">صدا</button>
+            <button class="sm-tab" data-type="links">پیوندها</button>
+          </div>
+          <div id="shared-media-content" class="shared-media-content"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- ═══ مودال گروه / کانال جدید ═══ -->
+  <div id="modal-new" class="modal-overlay hidden">
+    <div class="modal">
+      <header>
+        <h3 id="modal-new-title">گروه جدید</h3>
+        <button class="icon-btn modal-close" data-close="modal-new">✕</button>
+      </header>
+      <div class="modal-body">
+        <div class="avatar-pick" id="new-avatar-wrap" title="انتخاب عکس">
+          <span id="new-avatar-preview"></span>
+        </div>
+        <input type="file" id="new-avatar-input" accept="image/*" class="hidden">
+        <input id="new-chat-title" placeholder="نام گروه" maxlength="80">
+        <textarea id="new-chat-about" rows="2" maxlength="300" placeholder="توضیحات (اختیاری)"></textarea>
+        <input id="member-filter" placeholder="جستجوی مخاطبین...">
+        <div id="member-list" class="member-list"></div>
+      </div>
+      <footer>
+        <button id="create-chat-btn" class="btn-primary">ساخت</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ═══ مودال ویرایش گروه / کانال ═══ -->
+  <div id="modal-edit" class="modal-overlay hidden">
+    <div class="modal">
+      <header>
+        <h3>ویرایش گفتگو</h3>
+        <button class="icon-btn modal-close" data-close="modal-edit">✕</button>
+      </header>
+      <div class="modal-body">
+        <div class="avatar-pick" id="edit-avatar-wrap" title="تغییر عکس">
+          <span id="edit-avatar-preview"></span>
+        </div>
+        <input type="file" id="edit-avatar-input" accept="image/*" class="hidden">
+        <input id="edit-title" maxlength="80" placeholder="نام گفتگو">
+        <textarea id="edit-about" rows="3" maxlength="300" placeholder="توضیحات"></textarea>
+      </div>
+      <footer>
+        <button id="edit-save-btn" class="btn-primary">ذخیره</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ═══ مودال افزودن عضو ═══ -->
+  <div id="modal-add" class="modal-overlay hidden">
+    <div class="modal">
+      <header>
+        <h3>افزودن عضو</h3>
+        <button class="icon-btn modal-close" data-close="modal-add">✕</button>
+      </header>
+      <div class="modal-body">
+        <input id="add-filter" placeholder="جستجوی کاربران...">
+        <div id="add-list" class="member-list"></div>
+      </div>
+      <footer>
+        <button id="add-save-btn" class="btn-primary">افزودن</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ═══ مودال فوروارد ═══ -->
+  <div id="modal-forward" class="modal-overlay hidden">
+    <div class="modal">
+      <header>
+        <h3>فوروارد به…</h3>
+        <button class="icon-btn modal-close" data-close="modal-forward">✕</button>
+      </header>
+      <div class="modal-body">
+        <input id="forward-filter" placeholder="جستجوی گفتگوها...">
+        <div id="forward-list" class="forward-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ مودال پروفایل ═══ -->
+  <div id="modal-profile" class="modal-overlay hidden">
+    <div class="modal">
+      <header>
+        <h3>پروفایل من</h3>
+        <button class="icon-btn modal-close" data-close="modal-profile">✕</button>
+      </header>
+      <div class="modal-body">
+        <div class="avatar-pick big" id="prof-avatar-wrap" title="تغییر عکس پروفایل">
+          <span id="prof-avatar-preview"></span>
+        </div>
+        <input type="file" id="prof-avatar-input" accept="image/*" class="hidden">
+        <label class="field-label" for="prof-display">نام نمایشی</label>
+        <input id="prof-display" maxlength="50">
+        <label class="field-label" for="prof-username">نام کاربری</label>
+        <input id="prof-username" disabled>
+        <label class="field-label" for="prof-bio">بیوگرافی (درباره من)</label>
+        <textarea id="prof-bio" rows="2" maxlength="150" placeholder="چند کلمه درباره خودتان بنویسید..."></textarea>
+        <label class="field-label" for="prof-privacy">نمایش وضعیت آخرین بازدید</label>
+        <select id="prof-privacy" class="modal-select">
+          <option value="everyone">برای همه</option>
+          <option value="nobody">هیچ‌کس</option>
+        </select>
+        <div class="prof-extra-row">
+          <button id="prof-blocked-btn" class="btn-ghost sm" type="button">مدیریت کاربران مسدودشده</button>
+        </div>
+      </div>
+      <footer>
+        <button id="prof-save-btn" class="btn-primary">ذخیره تغییرات</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ═══ مودال ایجاد نظرسنجی ═══ -->
+  <div id="modal-poll" class="modal-overlay hidden">
+    <div class="modal">
+      <header>
+        <h3>نظرسنجی جدید</h3>
+        <button class="icon-btn modal-close" data-close="modal-poll">✕</button>
+      </header>
+      <div class="modal-body">
+        <label class="field-label" for="poll-question">صورت سوال:</label>
+        <input id="poll-question" placeholder="سوال نظرسنجی را مطرح کنید..." maxlength="255">
+        
+        <label class="field-label">گزینه‌ها:</label>
+        <div id="poll-options-list" class="poll-options-inputs">
+          <input class="poll-opt-input" placeholder="گزینه ۱">
+          <input class="poll-opt-input" placeholder="گزینه ۲">
+        </div>
+        <button id="poll-add-opt-btn" class="btn-ghost sm" type="button">+ افزودن گزینه</button>
+
+        <div class="poll-settings">
+          <label class="checkbox-label">
+            <input type="checkbox" id="poll-anonymous" checked>
+            <span>رای‌گیری ناشناس</span>
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="poll-multiple">
+            <span>امکان انتخاب چند گزینه</span>
+          </label>
+        </div>
+      </div>
+      <footer>
+        <button id="poll-create-btn" class="btn-primary">ایجاد نظرسنجی</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ═══ مودال زمان‌بندی پیام ═══ -->
+  <div id="modal-schedule" class="modal-overlay hidden">
+    <div class="modal modal-sm">
+      <header>
+        <h3>زمان‌بندی ارسال پیام</h3>
+        <button class="icon-btn modal-close" data-close="modal-schedule">✕</button>
+      </header>
+      <div class="modal-body">
+        <label class="field-label" for="sched-datetime">زمان ارسال:</label>
+        <input type="datetime-local" id="sched-datetime" class="modal-input">
+        <div class="sched-quick-picks">
+          <button type="button" class="btn-ghost sm" data-add-min="10">+ ۱۰ دقیقه</button>
+          <button type="button" class="btn-ghost sm" data-add-min="60">+ ۱ ساعت</button>
+          <button type="button" class="btn-ghost sm" data-add-min="1440">+ فردا همین موقع</button>
+        </div>
+      </div>
+      <footer>
+        <button id="sched-confirm-btn" class="btn-primary">تنظیم زمان‌بندی</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ═══ مودال تاپیک جدید گروه ═══ -->
+  <div id="modal-topic" class="modal-overlay hidden">
+    <div class="modal modal-sm">
+      <header>
+        <h3>ایجاد تاپیک جدید</h3>
+        <button class="icon-btn modal-close" data-close="modal-topic">✕</button>
+      </header>
+      <div class="modal-body">
+        <label class="field-label" for="topic-title">عنوان تاپیک:</label>
+        <input id="topic-title" placeholder="مثال: اخبار، سوالات و..." maxlength="50">
+        <label class="field-label" for="topic-icon">آیکون / ایموجی:</label>
+        <input id="topic-icon" value="💬" maxlength="4">
+      </div>
+      <footer>
+        <button id="topic-create-btn" class="btn-primary">ساخت تاپیک</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ═══ مودال پس‌زمینه گفتگو ═══ -->
+  <div id="modal-wallpaper" class="modal-overlay hidden">
+    <div class="modal">
+      <header>
+        <h3>انتخاب پس‌زمینه گفتگو</h3>
+        <button class="icon-btn modal-close" data-close="modal-wallpaper">✕</button>
+      </header>
+      <div class="modal-body">
+        <div class="wallpaper-grid" id="wallpaper-grid">
+          <div class="wp-card active" data-wp="default">
+            <div class="wp-preview wp-default"></div>
+            <span>پیش‌فرض تلگرامی</span>
+          </div>
+          <div class="wp-card" data-wp="gradient">
+            <div class="wp-preview wp-gradient"></div>
+            <span>گرادیانت آسمانی</span>
+          </div>
+          <div class="wp-card" data-wp="dark">
+            <div class="wp-preview wp-dark"></div>
+            <span>تیره ماتریکسی</span>
+          </div>
+          <div class="wp-card" data-wp="sunset">
+            <div class="wp-preview wp-sunset"></div>
+            <span>غروب خورشید</span>
+          </div>
+          <div class="wp-card" data-wp="clean">
+            <div class="wp-preview wp-clean"></div>
+            <span>ساده و مینیمال</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ مودال کاربران مسدودشده ═══ -->
+  <div id="modal-blocked" class="modal-overlay hidden">
+    <div class="modal">
+      <header>
+        <h3>کاربران مسدودشده</h3>
+        <button class="icon-btn modal-close" data-close="modal-blocked">✕</button>
+      </header>
+      <div class="modal-body">
+        <div id="blocked-users-list" class="member-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ مودال عضویت با لینک دعوت ═══ -->
+  <div id="modal-join" class="modal-overlay hidden">
+    <div class="modal">
+      <header>
+        <h3>عضویت با لینک دعوت</h3>
+        <button class="icon-btn modal-close" data-close="modal-join">✕</button>
+      </header>
+      <div class="modal-body">
+        <label class="field-label" for="join-input">لینک یا کد دعوت گروه یا کانال:</label>
+        <div class="join-row">
+          <input id="join-input" placeholder="کد دعوت یا لینک کامل...">
+          <button id="join-check-btn" class="btn-ghost" type="button">بررسی</button>
+        </div>
+        <div id="join-preview" class="join-preview hidden"></div>
+        <div id="join-error" class="auth-error hidden"></div>
+      </div>
+      <footer>
+        <button id="join-confirm-btn" class="btn-primary hidden">پیوستن به گفتگو</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ═══ مودال تایید ═══ -->
+  <div id="modal-confirm" class="modal-overlay hidden">
+    <div class="modal modal-sm">
+      <header>
+        <h3 id="confirm-title">تایید</h3>
+        <button class="icon-btn modal-close" data-close="modal-confirm">✕</button>
+      </header>
+      <div class="modal-body">
+        <p id="confirm-text" class="confirm-text"></p>
+      </div>
+      <footer>
+        <button id="confirm-cancel" class="btn-ghost">انصراف</button>
+        <button id="confirm-ok" class="btn-danger">تایید</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ═══ لایت‌باکس تصویر ═══ -->
+  <div id="lightbox" class="lightbox hidden"><img id="lightbox-img" alt=""></div>
+
+  <!-- ═══ منوی زمینه ═══ -->
+  <div id="ctx-menu" class="ctx-menu hidden"></div>
+
+  <!-- ═══ منوی ارسال ═══ -->
+  <div id="send-popover" class="send-popover hidden">
+    <button id="send-action-silent">🔕 ارسال بدون صدا</button>
+    <button id="send-action-schedule">🕒 زمان‌بندی ارسال</button>
+  </div>
+
+  <!-- ═══ اعلان کوتاه ═══ -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/constants.js"></script>
+  <script src="/js/state.js"></script>
+  <script src="/js/voice.js"></script>
+  <script src="/js/messages.js"></script>
+  <script src="/js/chats.js"></script>
+  <script src="/js/modals.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>
+

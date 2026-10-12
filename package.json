@@ -1,0 +1,16 @@
+{
+  "name": "ghasem-gram",
+  "version": "1.0.0",
+  "description": "پیام‌رسان قاسم‌گرام — رابط کاربری شبیه تلگرام",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "express": "^4.21.2",
+    "multer": "^2.0.1",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.3"
+  }
+}
