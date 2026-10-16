@@ -185,6 +185,12 @@ addColumnIfMissing('chat_members', 'muted_until', 'INTEGER NOT NULL DEFAULT 0');
 addColumnIfMissing('users', 'bio', 'TEXT');
 addColumnIfMissing('users', 'privacy_last_seen', "TEXT NOT NULL DEFAULT 'everyone'");
 addColumnIfMissing('users', 'status', "TEXT NOT NULL DEFAULT 'approved'");
+addColumnIfMissing('users', 'banned_until', 'INTEGER');
+addColumnIfMissing('users', 'ban_reason', 'TEXT');
+
+addColumnIfMissing('sessions', 'user_agent', 'TEXT');
+addColumnIfMissing('sessions', 'ip', 'TEXT');
+addColumnIfMissing('sessions', 'last_active_at', 'INTEGER');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS admins (
@@ -200,6 +206,19 @@ db.exec(`
     created_at INTEGER NOT NULL
   );
 `);
+
+addColumnIfMissing('admins', 'recovery_key', 'TEXT');
+
+// اطمینان از وجود کلید بازیابی برای ادمین‌های موجود
+try {
+  const { generateRecoveryKey } = require('./util');
+  const adminsWithoutKey = db.prepare("SELECT id FROM admins WHERE recovery_key IS NULL OR recovery_key = ''").all();
+  for (const a of adminsWithoutKey) {
+    db.prepare('UPDATE admins SET recovery_key = ? WHERE id = ?').run(generateRecoveryKey(), a.id);
+  }
+} catch (e) {
+  console.error('[DB] Failed to set admin recovery key:', e);
+}
 
 function ensureSafirBot() {
   let u = db.prepare("SELECT * FROM users WHERE username = 'safir'").get();

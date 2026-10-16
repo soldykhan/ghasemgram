@@ -7,7 +7,16 @@ const crypto = require('crypto');
 const multer = require('multer');
 
 const { UPLOAD_DIR, ensureSafirBot } = require('./db');
-const { USERNAME_RE, hashPassword, verifyPassword, newToken, fixFileName } = require('./util');
+const {
+  USERNAME_RE,
+  hashPassword,
+  verifyPassword,
+  newToken,
+  fixFileName,
+  generateRecoveryKey,
+  formatRemainingBanTime,
+  parseDevice,
+} = require('./util');
 
 const MAX_FILE_SIZE = 200 * 1024 * 1024; // ۲۰۰ مگابایت
 
@@ -52,6 +61,8 @@ module.exports = function createApi(db, sock) {
       bio: u.bio || '',
       privacy_last_seen: u.privacy_last_seen || 'everyone',
       status: u.status || 'approved',
+      banned_until: u.banned_until ? Number(u.banned_until) : null,
+      is_safir: u.username === 'safir',
       last_seen_at: lastSeen,
     };
   }
@@ -383,6 +394,20 @@ module.exports = function createApi(db, sock) {
       ? db.prepare('SELECT u.*, s.token AS session_token FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?').get(token)
       : null;
     if (!row) return next(err(401, 'ابتدا وارد حساب خود شوید.'));
+
+    if (row.status === 'banned') {
+      return next(err(403, 'این حساب بن شده است'));
+    }
+    if (row.status === 'temp_banned') {
+      const now = Date.now();
+      if (row.banned_until && now < Number(row.banned_until)) {
+        return next(err(403, `این حساب بن شده است. زمان باقی‌مانده تا رفع مسدودیت: ${formatRemainingBanTime(Number(row.banned_until) - now)}`));
+      } else {
+        db.prepare("UPDATE users SET status = 'approved', banned_until = NULL WHERE id = ?").run(row.id);
+        row.status = 'approved';
+      }
+    }
+
     req.user = row;
     req.token = token;
     next();
@@ -455,7 +480,9 @@ module.exports = function createApi(db, sock) {
       }
 
       const token = newToken();
-      db.prepare('INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)').run(token, userId, now);
+      const ua = req.headers['user-agent'] || '';
+      const ip = req.ip || req.socket?.remoteAddress || '';
+      db.prepare('INSERT INTO sessions (token, user_id, created_at, user_agent, ip, last_active_at) VALUES (?, ?, ?, ?, ?, ?)').run(token, userId, now, ua, ip, now);
 
       // ارسال پیام توسط ربات سفیر: "شما در انتظار تایید ادمین هستید"
       sendSafirBotMessage(userId, 'شما در انتظار تایید ادمین هستید');
@@ -473,9 +500,26 @@ module.exports = function createApi(db, sock) {
       const u = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
       if (!u || !verifyPassword(password, u.password_hash)) throw err(401, 'نام کاربری یا رمز عبور اشتباه است.');
 
+      if (u.status === 'banned') {
+        throw err(403, 'این حساب بن شده است');
+      }
+      if (u.status === 'temp_banned') {
+        const now = Date.now();
+        if (u.banned_until && now < Number(u.banned_until)) {
+          const remainingMs = Number(u.banned_until) - now;
+          throw err(403, `این حساب بن شده است. زمان باقی‌مانده تا رفع مسدودیت: ${formatRemainingBanTime(remainingMs)}`);
+        } else {
+          db.prepare("UPDATE users SET status = 'approved', banned_until = NULL WHERE id = ?").run(u.id);
+          u.status = 'approved';
+        }
+      }
+
       const token = newToken();
-      db.prepare('INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)').run(token, u.id, Date.now());
-      db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(Date.now(), u.id);
+      const now = Date.now();
+      const ua = req.headers['user-agent'] || '';
+      const ip = req.ip || req.socket?.remoteAddress || '';
+      db.prepare('INSERT INTO sessions (token, user_id, created_at, user_agent, ip, last_active_at) VALUES (?, ?, ?, ?, ?, ?)').run(token, u.id, now, ua, ip, now);
+      db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(now, u.id);
       res.json({ token, user: { ...userPublic(u), last_seen_at: u.last_seen_at } });
     })
   );
@@ -487,6 +531,58 @@ module.exports = function createApi(db, sock) {
       db.prepare('DELETE FROM sessions WHERE token = ?').run(req.token);
       db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(Date.now(), req.user.id);
       res.json({ ok: true });
+    })
+  );
+
+  /* ---------------- نشست‌ها و دستگاه‌های متصل ---------------- */
+
+  api.get(
+    '/sessions',
+    auth,
+    h(async (req, res) => {
+      const rows = db.prepare('SELECT token, created_at, user_agent, ip, last_active_at FROM sessions WHERE user_id = ? ORDER BY created_at DESC').all(req.user.id);
+      const sessions = rows.map((r) => {
+        const isCurrent = r.token === req.token;
+        const device = parseDevice(r.user_agent);
+        return {
+          id: r.token.slice(0, 16),
+          is_current: isCurrent,
+          created_at: Number(r.created_at),
+          last_active_at: Number(r.last_active_at || r.created_at),
+          device,
+          ip: r.ip || '',
+        };
+      });
+      res.json({ sessions });
+    })
+  );
+
+  api.delete(
+    '/sessions/:id',
+    auth,
+    h(async (req, res) => {
+      const safeId = String(req.params.id);
+      const row = db.prepare('SELECT token FROM sessions WHERE user_id = ? AND token LIKE ?').get(req.user.id, safeId + '%');
+      if (!row) throw err(404, 'نشست پیدا نشد.');
+      if (row.token === req.token) {
+        throw err(400, 'امکان پایان دادن به نشست کنونی از اینجا وجود ندارد.');
+      }
+      db.prepare('DELETE FROM sessions WHERE token = ?').run(row.token);
+      sock.disconnectSession(row.token, 'اتصال دستگاه شما توسط کاربر قطع شد.');
+      res.json({ ok: true, message: 'اتصال دستگاه بسته شد.' });
+    })
+  );
+
+  api.post(
+    '/sessions/terminate-others',
+    auth,
+    h(async (req, res) => {
+      const otherTokens = db.prepare('SELECT token FROM sessions WHERE user_id = ? AND token != ?').all(req.user.id, req.token);
+      db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(req.user.id, req.token);
+      for (const r of otherTokens) {
+        sock.disconnectSession(r.token, 'سایر نشست‌های شما خاتمه یافت.');
+      }
+      res.json({ ok: true, message: 'همه دستگاه‌ها به جز این دستگاه بسته شدند.' });
     })
   );
 
@@ -656,8 +752,12 @@ module.exports = function createApi(db, sock) {
     auth,
     h(async (req, res) => {
       const rows = db.prepare('SELECT chat_id FROM chat_members WHERE user_id = ?').all(req.user.id);
-      const items = rows.map((r) => chatListItem(r.chat_id, req.user.id)).filter(Boolean);
+      let items = rows.map((r) => chatListItem(r.chat_id, req.user.id)).filter(Boolean);
       items.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated_at - a.updated_at);
+      if (req.user && req.user.status === 'pending') {
+        const safir = ensureSafirBot();
+        items = items.filter((c) => c.peer && Number(c.peer.id) === Number(safir.id));
+      }
       res.json({ chats: items });
     })
   );
@@ -667,6 +767,13 @@ module.exports = function createApi(db, sock) {
     auth,
     h(async (req, res) => {
       const chatId = Number(req.params.id);
+      if (req.user && req.user.status === 'pending') {
+        const safir = ensureSafirBot();
+        const isSafirChat = db.prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?').get(chatId, safir.id);
+        if (!isSafirChat) {
+          throw err(403, 'حساب شما در انتظار تایید است و فقط مجاز به مشاهده پیام‌های سفیر هستید.');
+        }
+      }
       const item = chatListItem(chatId, req.user.id);
       if (!item) throw err(404, 'گفتگو پیدا نشد.');
       const members = db
@@ -1136,6 +1243,15 @@ module.exports = function createApi(db, sock) {
     h(async (req, res) => {
       const chatId = Number(req.params.id);
       if (!getMembership(chatId, req.user.id)) throw err(403, 'به این گفتگو دسترسی ندارید.');
+
+      if (req.user && req.user.status === 'pending') {
+        const safir = ensureSafirBot();
+        const isSafirChat = db.prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?').get(chatId, safir.id);
+        if (!isSafirChat) {
+          throw err(403, 'حساب شما در انتظار تایید است و فقط مجاز به مشاهده پیام‌های سفیر هستید.');
+        }
+      }
+
       const before = req.query.before ? Number(req.query.before) : Number.MAX_SAFE_INTEGER;
       const limit = Math.min(Number(req.query.limit) || 50, 100);
       const topicId = req.query.topic_id ? Number(req.query.topic_id) : null;
@@ -1765,17 +1881,73 @@ module.exports = function createApi(db, sock) {
     if (!password || password.length < 6) throw err(400, 'رمز عبور ادمین باید حداقل ۶ کاراکتر باشد.');
 
     const now = Date.now();
-    const info = db.prepare('INSERT INTO admins (username, password_hash, created_at) VALUES (?, ?, ?)').run(username, hashPassword(password), now);
+    const recoveryKey = generateRecoveryKey(10000);
+    const info = db.prepare('INSERT INTO admins (username, password_hash, recovery_key, created_at) VALUES (?, ?, ?, ?)').run(username, hashPassword(password), recoveryKey, now);
     const adminId = Number(info.lastInsertRowid);
     const token = newToken();
     db.prepare('INSERT INTO admin_sessions (token, admin_id, created_at) VALUES (?, ?, ?)').run(token, adminId, now);
-    res.json({ ok: true, token, admin: { id: adminId, username } });
+    res.json({ ok: true, token, admin: { id: adminId, username }, recovery_key: recoveryKey });
   }));
 
-  // بازنشانی حساب ادمین (در صورت فراموشی رمز یا نیاز به تنظیم مجدد)
-  api.post('/admin/reset', h(async (req, res) => {
-    db.exec('DELETE FROM admin_sessions; DELETE FROM admins;');
-    res.json({ ok: true, message: 'پنل مدیریت بازنشانی شد. اکنون می‌توانید نام کاربری و رمز عبور جدید تعیین کنید.' });
+  // دانلود فایل کلید بازیابی ادمین (.txt)
+  api.get('/admin/recovery-key/download', adminAuth, h(async (req, res) => {
+    const a = db.prepare('SELECT recovery_key FROM admins WHERE id = ?').get(req.admin.id);
+    let key = a ? a.recovery_key : null;
+    if (!key) {
+      key = generateRecoveryKey(10000);
+      db.prepare('UPDATE admins SET recovery_key = ? WHERE id = ?').run(key, req.admin.id);
+    }
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="ghasemgram-admin-recovery-key.txt"');
+    res.send(key);
+  }));
+
+  // تولید مجدد کلید بازیابی ادمین
+  api.post('/admin/recovery-key/regenerate', adminAuth, h(async (req, res) => {
+    const newKey = generateRecoveryKey(10000);
+    db.prepare('UPDATE admins SET recovery_key = ? WHERE id = ?').run(newKey, req.admin.id);
+    res.json({ ok: true, message: 'فایل کلید بازیابی با موفقیت ریست شد. لطفاً فایل جدید را دانلود و نگهداری کنید.', key: newKey });
+  }));
+
+  // بازنشانی نام کاربری و رمز عبور ادمین فقط با آپلود فایل txt کلید بازیابی
+  api.post('/admin/recovery-reset', upload.single('key_file'), h(async (req, res) => {
+    let uploadedKey = '';
+    if (req.file) {
+      try {
+        uploadedKey = fs.readFileSync(req.file.path, 'utf8').trim();
+        fs.unlinkSync(req.file.path);
+      } catch (e) {
+        console.error('Failed to read key file:', e);
+      }
+    } else if (req.body.key) {
+      uploadedKey = String(req.body.key).trim();
+    }
+    if (!uploadedKey) throw err(400, 'لطفاً فایل کلید بازیابی (.txt) را بارگذاری نمایید.');
+
+    const a = db.prepare('SELECT id, username, recovery_key FROM admins LIMIT 1').get();
+    if (!a || !a.recovery_key) throw err(400, 'حساب مدیریتی یافت نشد.');
+
+    // بررسی دقیق کلید بازیابی
+    if (uploadedKey !== a.recovery_key.trim()) {
+      throw err(403, 'محتوای فایل کلید بازیابی نامعتبر است! احراز هویت ادمین تایید نشد.');
+    }
+
+    const newUsername = String(req.body.new_username || a.username).trim();
+    const newPassword = String(req.body.new_password || '');
+    if (newUsername.length < 3) throw err(400, 'نام کاربری باید حداقل ۳ کاراکتر باشد.');
+    if (!newPassword || newPassword.length < 6) throw err(400, 'رمز عبور جدید باید حداقل ۶ کاراکتر باشد.');
+
+    const newHash = hashPassword(newPassword);
+    const newKey = generateRecoveryKey(10000);
+    db.prepare('UPDATE admins SET username = ?, password_hash = ?, recovery_key = ? WHERE id = ?')
+      .run(newUsername, newHash, newKey, a.id);
+    db.exec('DELETE FROM admin_sessions');
+
+    res.json({
+      ok: true,
+      message: 'اطلاعات ادمین با موفقیت بازنشانی شد. اکنون می‌توانید با نام کاربری و رمز عبور جدید وارد شوید.',
+      new_recovery_key: newKey,
+    });
   }));
 
   // ورود ادمین
@@ -1827,27 +1999,133 @@ module.exports = function createApi(db, sock) {
     res.json({ ok: true, admin: { id: Number(req.admin.id), username: newUsername } });
   }));
 
-  // لیست کاربران (در انتظار تایید و تایید شده)
+  /* ---------------- مدیریت سفیر ---------------- */
+
+  // دریافت اطلاعات سفیر
+  api.get('/admin/safir', adminAuth, h(async (req, res) => {
+    const safir = ensureSafirBot();
+    res.json({
+      safir: {
+        id: Number(safir.id),
+        username: safir.username,
+        display_name: safir.display_name,
+        avatar_url: fileUrl(safir.avatar_file_id),
+        bio: safir.bio || '',
+      },
+    });
+  }));
+
+  // ویرایش مشخصات سفیر (نام، پروفایل، بیو)
+  api.put(
+    '/admin/safir',
+    adminAuth,
+    upload.single('avatar'),
+    h(async (req, res) => {
+      const safir = ensureSafirBot();
+      const displayName = req.body.display_name ? String(req.body.display_name).trim() : safir.display_name;
+      const bio = req.body.bio !== undefined ? String(req.body.bio).trim() : safir.bio;
+      let avatarFileId = safir.avatar_file_id;
+      if (req.file) {
+        avatarFileId = saveFile(req.file, null);
+      }
+
+      db.prepare('UPDATE users SET display_name = ?, bio = ?, avatar_file_id = ? WHERE id = ?')
+        .run(displayName, bio, avatarFileId, safir.id);
+      const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(safir.id);
+
+      // اطلاع‌رسانی به چت‌های فعال برای به‌روزرسانی پروفایل سفیر
+      sock.emitToUser(safir.id, 'presence', { user_id: safir.id, online: true });
+
+      res.json({
+        ok: true,
+        safir: {
+          id: Number(updated.id),
+          username: updated.username,
+          display_name: updated.display_name,
+          avatar_url: fileUrl(updated.avatar_file_id),
+          bio: updated.bio,
+        },
+      });
+    })
+  );
+
+  // ارسال پیام همگانی توسط سفیر به همه کاربران
+  api.post('/admin/safir/broadcast', adminAuth, h(async (req, res) => {
+    const text = String(req.body.text || '').trim();
+    if (!text) throw err(400, 'متن پیام همگانی را وارد کنید.');
+    const users = db.prepare("SELECT id FROM users WHERE username != 'safir'").all();
+    let sentCount = 0;
+    for (const u of users) {
+      try {
+        sendSafirBotMessage(u.id, text);
+        sentCount++;
+      } catch {}
+    }
+    res.json({ ok: true, sent_count: sentCount, message: `پیام همگانی با موفقیت برای ${sentCount} کاربر ارسال شد.` });
+  }));
+
+  // ارسال پیام سفیر به یک کاربر خاص
+  api.post('/admin/safir/message', adminAuth, h(async (req, res) => {
+    const targetId = Number(req.body.user_id);
+    const text = String(req.body.text || '').trim();
+    if (!targetId) throw err(400, 'کاربر انتخاب نشده است.');
+    if (!text) throw err(400, 'متن پیام را وارد کنید.');
+    const u = getUserById(targetId);
+    if (!u) throw err(404, 'کاربر پیدا نشد.');
+    sendSafirBotMessage(targetId, text);
+    res.json({ ok: true, message: `پیام سفیر با موفقیت برای «${u.display_name}» ارسال شد.` });
+  }));
+
+  /* ---------------- مدیریت کاربران ---------------- */
+
+  // لیست کاربران (با قابلیت جستجو و فیلتر)
   api.get('/admin/users', adminAuth, h(async (req, res) => {
-    const pending = db
-      .prepare("SELECT id, username, display_name, avatar_file_id, status, created_at FROM users WHERE status = 'pending' AND username != 'safir' ORDER BY created_at DESC")
-      .all()
-      .map((u) => ({ ...userPublic(u), created_at: Number(u.created_at) }));
+    const q = String(req.query.q || '').trim().toLowerCase();
+    let sql = "SELECT id, username, display_name, avatar_file_id, status, banned_until, created_at, last_seen_at FROM users WHERE username != 'safir'";
+    const params = [];
+    if (q) {
+      sql += " AND (LOWER(username) LIKE ? OR LOWER(display_name) LIKE ?)";
+      params.push(`%${q}%`, `%${q}%`);
+    }
+    sql += " ORDER BY created_at DESC";
+    const allRows = db.prepare(sql).all(...params);
 
-    const approved = db
-      .prepare("SELECT id, username, display_name, avatar_file_id, status, created_at, last_seen_at FROM users WHERE status = 'approved' AND username != 'safir' ORDER BY created_at DESC LIMIT 100")
-      .all()
-      .map((u) => ({ ...userPublic(u), created_at: Number(u.created_at), last_seen_at: Number(u.last_seen_at) }));
+    const now = Date.now();
+    const users = allRows.map((u) => {
+      let status = u.status;
+      if (status === 'temp_banned' && u.banned_until && now >= Number(u.banned_until)) {
+        db.prepare("UPDATE users SET status = 'approved', banned_until = NULL WHERE id = ?").run(u.id);
+        status = 'approved';
+      }
+      return {
+        id: Number(u.id),
+        username: u.username,
+        display_name: u.display_name,
+        avatar_url: fileUrl(u.avatar_file_id),
+        status,
+        banned_until: u.banned_until ? Number(u.banned_until) : null,
+        banned_remaining: status === 'temp_banned' && u.banned_until && Number(u.banned_until) > now
+          ? formatRemainingBanTime(Number(u.banned_until) - now)
+          : null,
+        created_at: Number(u.created_at),
+        last_seen_at: u.last_seen_at ? Number(u.last_seen_at) : null,
+      };
+    });
 
-    const totalUsers = db.prepare("SELECT COUNT(*) AS c FROM users WHERE username != 'safir'").get().c;
+    const pending = users.filter((u) => u.status === 'pending');
+    const approved = users.filter((u) => u.status === 'approved');
+    const banned = users.filter((u) => u.status === 'banned' || u.status === 'temp_banned');
 
     res.json({
+      users,
       pending,
       approved,
+      banned,
       stats: {
-        total_users: Number(totalUsers),
+        total_users: users.length,
         pending_count: pending.length,
         approved_count: approved.length,
+        banned_count: banned.length,
       },
     });
   }));
@@ -1859,7 +2137,7 @@ module.exports = function createApi(db, sock) {
     if (!u) throw err(404, 'کاربر پیدا نشد.');
     if (u.username === 'safir') throw err(400, 'ربات سفیر قابل ویرایش نیست.');
 
-    db.prepare("UPDATE users SET status = 'approved' WHERE id = ?").run(targetId);
+    db.prepare("UPDATE users SET status = 'approved', banned_until = NULL WHERE id = ?").run(targetId);
 
     // ربات سفیر پیام "ادمین تاییدت کرد" را ارسال می‌کند
     sendSafirBotMessage(targetId, 'ادمین تاییدت کرد');
@@ -1880,7 +2158,55 @@ module.exports = function createApi(db, sock) {
     db.prepare("UPDATE users SET status = 'rejected' WHERE id = ?").run(targetId);
     db.prepare('DELETE FROM sessions WHERE user_id = ?').run(targetId);
     sock.emitToUser(targetId, 'user-status-changed', { status: 'rejected' });
+    sock.disconnectUser(targetId, 'حساب شما رد شد.');
     res.json({ ok: true, message: 'کاربر رد شد.' });
+  }));
+
+  // بن دائمی کاربر
+  api.post('/admin/users/:id/ban-permanent', adminAuth, h(async (req, res) => {
+    const targetId = Number(req.params.id);
+    const u = getUserById(targetId);
+    if (!u) throw err(404, 'کاربر پیدا نشد.');
+    if (u.username === 'safir') throw err(400, 'ربات سفیر قابل بن شدن نیست.');
+
+    db.prepare("UPDATE users SET status = 'banned', banned_until = NULL WHERE id = ?").run(targetId);
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(targetId);
+    sock.disconnectUser(targetId, 'این حساب بن شده است.');
+    res.json({ ok: true, message: 'کاربر به صورت دائمی بن شد و از تمامی دستگاه‌ها خارج شد.' });
+  }));
+
+  // بن موقت کاربر
+  api.post('/admin/users/:id/ban-temp', adminAuth, h(async (req, res) => {
+    const targetId = Number(req.params.id);
+    const u = getUserById(targetId);
+    if (!u) throw err(404, 'کاربر پیدا نشد.');
+    if (u.username === 'safir') throw err(400, 'ربات سفیر قابل بن شدن نیست.');
+
+    const hours = Number(req.body.hours) || 24;
+    if (hours <= 0) throw err(400, 'مدت زمان بن موقت باید بیشتر از صفر باشد.');
+    const durationMs = hours * 3600 * 1000;
+    const bannedUntil = Date.now() + durationMs;
+
+    db.prepare("UPDATE users SET status = 'temp_banned', banned_until = ? WHERE id = ?").run(bannedUntil, targetId);
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(targetId);
+    const remStr = formatRemainingBanTime(durationMs);
+    sock.disconnectUser(targetId, `این حساب بن شده است. زمان باقی‌مانده: ${remStr}`);
+    res.json({
+      ok: true,
+      banned_until: bannedUntil,
+      remaining: remStr,
+      message: `کاربر به مدت ${remStr} بن موقت شد و از تمامی دستگاه‌ها خارج گردید.`,
+    });
+  }));
+
+  // رفع مسدودیت (آن‌بن) کاربر
+  api.post('/admin/users/:id/unban', adminAuth, h(async (req, res) => {
+    const targetId = Number(req.params.id);
+    const u = getUserById(targetId);
+    if (!u) throw err(404, 'کاربر پیدا نشد.');
+
+    db.prepare("UPDATE users SET status = 'approved', banned_until = NULL WHERE id = ?").run(targetId);
+    res.json({ ok: true, message: 'مسدودیت کاربر برداشته شد.' });
   }));
 
   /* ---------------- مدیریت خطا ---------------- */

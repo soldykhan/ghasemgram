@@ -80,6 +80,14 @@ async function api(path, { method = 'GET', body, formData } = {}) {
   const data = isJson ? await res.json() : await res.text();
   if (!res.ok) {
     const msg = data && data.error ? data.error : typeof data === 'string' ? data : 'خطا در برقراری ارتباط';
+    if ((res.status === 401 || (res.status === 403 && (msg.includes('بن') || msg.includes('مسدود')))) && state.token) {
+      state.token = null;
+      localStorage.removeItem('gg_token');
+      if ($('#auth-screen')?.classList.contains('hidden')) {
+        alert(msg);
+        window.location.reload();
+      }
+    }
     throw new Error(msg);
   }
   return data;

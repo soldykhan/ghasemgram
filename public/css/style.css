@@ -127,7 +127,21 @@ svg { display: block; }
 .avatar-pick.big svg { width: 38px; height: 38px; }
 
 /* ═══ چیدمان اصلی ═══ */
-.app { display: flex; height: 100vh; }
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+}
+.app-main-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  position: relative;
+  overflow: hidden;
+}
 
 /* ─── سایدبار ─── */
 .sidebar {
@@ -1230,16 +1244,20 @@ html[dir="ltr"] .settings-drawer-content {
 /* هدر پروفایل با گرادیانت و پترن تلگرامی */
 .settings-hero {
   position: relative;
-  background: linear-gradient(165deg, #2AABEE 0%, #229ED9 45%, #1871a8 100%);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cg fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' opacity='0.16'%3E%3Ccircle cx='30' cy='30' r='10'/%3E%3Cpath d='M130 20l6 12 14 2-10 10 2 14-12-6-12 6 2-14-10-10 14-2z'/%3E%3Cpath d='M40 130c-4-4-4-12 0-16 4-4 10-3 14 1 4-4 10-5 14-1 4 4 4 12 0 16l-14 14z'/%3E%3Cpath d='M110 130h30a8 8 0 018 8v12a8 8 0 01-8 8h-18l-10 8v-28a8 8 0 018-8z'/%3E%3Ccircle cx='150' cy='85' r='6'/%3E%3C/g%3E%3C/svg%3E");
+  background-color: #229ED9;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cg fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' opacity='0.25'%3E%3Ccircle cx='30' cy='30' r='10'/%3E%3Cpath d='M130 20l6 12 14 2-10 10 2 14-12-6-12 6 2-14-10-10 14-2z'/%3E%3Cpath d='M40 130c-4-4-4-12 0-16 4-4 10-3 14 1 4-4 10-5 14-1 4 4 4 12 0 16l-14 14z'/%3E%3Cpath d='M110 130h30a8 8 0 018 8v12a8 8 0 01-8 8h-18l-10 8v-28a8 8 0 018-8z'/%3E%3Ccircle cx='150' cy='85' r='6'/%3E%3Cpath d='M25 80l16-6-6 16-3-4z'/%3E%3Cpath d='M85 25l4 8 8 4-8 4-4 8-4-8-8-4 8-4z'/%3E%3Cpath d='M95 105c3-3 8-3 11 0s3 8 0 11l-11 11-11-11c-3-3-3-8 0-11s8-3 11 0z'/%3E%3C/g%3E%3C/svg%3E"), linear-gradient(165deg, #2AABEE 0%, #229ED9 45%, #1871a8 100%);
+  background-repeat: repeat, no-repeat;
+  background-size: 180px 180px, cover;
   padding: 16px 16px 20px;
   display: flex; flex-direction: column; align-items: center;
   color: #fff; flex: none;
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.12);
 }
 [data-theme="dark"] .settings-hero {
-  background: linear-gradient(165deg, #1f2c3d 0%, #15202b 60%, #0e1621 100%);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cg fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' opacity='0.1'%3E%3Ccircle cx='30' cy='30' r='10'/%3E%3Cpath d='M130 20l6 12 14 2-10 10 2 14-12-6-12 6 2-14-10-10 14-2z'/%3E%3Cpath d='M40 130c-4-4-4-12 0-16 4-4 10-3 14 1 4-4 10-5 14-1 4 4 4 12 0 16l-14 14z'/%3E%3Cpath d='M110 130h30a8 8 0 018 8v12a8 8 0 01-8 8h-18l-10 8v-28a8 8 0 018-8z'/%3E%3Ccircle cx='150' cy='85' r='6'/%3E%3C/g%3E%3C/svg%3E");
+  background-color: #15202b;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cg fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' opacity='0.16'%3E%3Ccircle cx='30' cy='30' r='10'/%3E%3Cpath d='M130 20l6 12 14 2-10 10 2 14-12-6-12 6 2-14-10-10 14-2z'/%3E%3Cpath d='M40 130c-4-4-4-12 0-16 4-4 10-3 14 1 4-4 10-5 14-1 4 4 4 12 0 16l-14 14z'/%3E%3Cpath d='M110 130h30a8 8 0 018 8v12a8 8 0 01-8 8h-18l-10 8v-28a8 8 0 018-8z'/%3E%3Ccircle cx='150' cy='85' r='6'/%3E%3Cpath d='M25 80l16-6-6 16-3-4z'/%3E%3Cpath d='M85 25l4 8 8 4-8 4-4 8-4-8-8-4 8-4z'/%3E%3Cpath d='M95 105c3-3 8-3 11 0s3 8 0 11l-11 11-11-11c-3-3-3-8 0-11s8-3 11 0z'/%3E%3C/g%3E%3C/svg%3E"), linear-gradient(165deg, #1f2c3d 0%, #15202b 60%, #0e1621 100%);
+  background-repeat: repeat, no-repeat;
+  background-size: 180px 180px, cover;
 }
 
 .settings-hero-top {
@@ -1266,14 +1284,34 @@ html[dir="ltr"] .settings-drawer-content {
   margin-bottom: 10px; position: relative;
 }
 .settings-avatar {
-  width: 90px; height: 90px; border-radius: 50%;
+  width: 92px; height: 92px; border-radius: 50%;
   border: 3.5px solid rgba(255, 255, 255, 0.95);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
   display: flex; align-items: center; justify-content: center;
-  font-size: 34px; font-weight: 700; color: #fff;
-  overflow: hidden; background: #3390ec;
+  overflow: hidden;
+  background: transparent;
+  padding: 0;
 }
-.settings-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.settings-avatar .avatar,
+.settings-avatar .avatar.large {
+  width: 100% !important;
+  height: 100% !important;
+  font-size: 36px;
+  font-weight: 700;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  border: none;
+  box-shadow: none;
+}
+.settings-avatar .avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
 
 .settings-name-row {
   display: flex; align-items: center; gap: 6px;
@@ -1387,4 +1425,153 @@ html[dir="ltr"] .settings-drawer-content {
 .btn-ghost.sm { padding: 6px 12px; font-size: 12.5px; }
 .composer-actions-left { display: flex; align-items: center; gap: 2px; }
 .composer-actions-right { display: flex; align-items: center; gap: 4px; }
+
+/* ─── تیک آبی سفیر (Verified Badge) ─── */
+.verified-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  margin-inline-start: 4px;
+  vertical-align: -3px;
+  flex: none;
+}
+.verified-badge svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* ─── مودال دستگاه‌های من ─── */
+.modal-devices {
+  max-width: 480px;
+  width: 100%;
+}
+.terminate-all-wrap {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 16px;
+  text-align: center;
+  margin-bottom: 20px;
+}
+.btn-terminate-all {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: #e53935;
+  color: #fff;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.btn-terminate-all:hover { background: #c62828; }
+.terminate-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 8px;
+  line-height: 1.5;
+}
+.devices-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 10px;
+  margin-top: 14px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-color);
+}
+.devices-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.device-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 12px 14px;
+  transition: border-color .15s ease;
+}
+.device-card.current {
+  border-color: rgba(46, 204, 113, 0.4);
+  background: rgba(46, 204, 113, 0.04);
+}
+.device-card-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.device-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: rgba(42, 171, 238, 0.12);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex: none;
+}
+.device-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.device-name {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.device-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.badge-current-device {
+  background: rgba(46, 204, 113, 0.18);
+  color: #2ecc71;
+  border: 1px solid rgba(46, 204, 113, 0.4);
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 12px;
+  white-space: nowrap;
+}
+.btn-terminate-device {
+  background: transparent;
+  border: 1px solid rgba(229, 57, 53, 0.35);
+  color: #e53935;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all .15s ease;
+  white-space: nowrap;
+}
+.btn-terminate-device:hover {
+  background: #e53935;
+  color: #fff;
+}
+.no-devices {
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 16px;
+}
 

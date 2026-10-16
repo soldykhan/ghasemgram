@@ -20,6 +20,25 @@ function listTime(ts) {
   return d.toLocaleDateString('fa-IR', { day: 'numeric', month: 'short' });
 }
 
+function relLastSeen(ts) {
+  if (!ts) return 'آخرین بازدید خیلی وقت پیش';
+  const diff = Date.now() - Number(ts);
+  if (diff < 60 * 1000) return 'آخرین بازدید لحظاتی پیش';
+  if (diff < 60 * 60 * 1000) {
+    const mins = Math.floor(diff / (60 * 1000));
+    return `آخرین بازدید ${faNum(mins)} دقیقه قبل`;
+  }
+  const d = new Date(ts), now = new Date();
+  if (d.toDateString() === now.toDateString()) {
+    return `آخرین بازدید امروز در ${faTime(ts)}`;
+  }
+  const yest = new Date(now.getTime() - 24 * 3600 * 1000);
+  if (d.toDateString() === yest.toDateString()) {
+    return `آخرین بازدید دیروز در ${faTime(ts)}`;
+  }
+  return `آخرین بازدید ${faDate(ts)}`;
+}
+
 function fmtSize(n) {
   if (n == null) return '';
   if (n < 1024) return faNum(n) + ' بایت';
@@ -133,7 +152,12 @@ const ICONS = {
   singleTick: '<svg viewBox="0 0 16 11" class="tick-svg" aria-hidden="true"><path d="M3.5 5.8L6.5 8.8L12.5 2.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   // دو تیک موازی با فاصله دقیق ۵ پیکسلی بدون هرگونه تداخل و درهم‌رفتگی
   doubleTick: '<svg viewBox="0 0 18 11" class="tick-svg" aria-hidden="true"><path d="M1.5 5.8L4.5 8.8L10.5 2.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M6.5 5.8L9.5 8.8L15.5 2.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  verified: '<svg viewBox="0 0 24 24" class="verified-badge-svg"><path fill="#2AABEE" d="M12 2l2.4 2.4 3.4-.4 1.4 3.1 3.1 1.4-.4 3.4L24 14.3l-2.4 2.4.4 3.4-3.1 1.4-1.4 3.1-3.4-.4-2.4 2.4-2.4-2.4-3.4.4-1.4-3.1-3.1-1.4.4-3.4L0 12l2.4-2.4-.4-3.4 3.1-1.4 1.4-3.1 3.4.4L12 2z"/><path fill="#fff" d="M10 15.5l-3.5-3.5 1.4-1.4 2.1 2.1 5.6-5.6 1.4 1.4-7 7z"/></svg>',
 };
+
+function verifiedBadgeHTML() {
+  return `<span class="verified-badge" title="سفیر رسمی">${ICONS.verified}</span>`;
+}
 
 const singleCheckSVG = () => ICONS.singleTick;
 const doubleCheckSVG = () => ICONS.doubleTick;

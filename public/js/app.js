@@ -133,12 +133,20 @@ function connectSocket() {
 
   socket.on('message', onIncomingMessage);
 
-  socket.on('user-status-changed', ({ status }) => {
+  socket.on('user-status-changed', async ({ status }) => {
     if (state.me) state.me.status = status;
     updateApprovalState();
     if (status === 'approved') {
       showToast('🎉 حساب کاربری شما توسط ادمین تایید شد! هم‌اکنون می‌توانید شروع به گفتگو کنید.');
+      await loadChats();
     }
+  });
+
+  socket.on('session-terminated', ({ reason }) => {
+    state.token = null;
+    localStorage.removeItem('gg_token');
+    alert(reason || 'نشست شما پایان یافته است.');
+    window.location.reload();
   });
 
   socket.on('message-edited', ({ chat_id, message }) => {
@@ -281,9 +289,9 @@ function connectSocket() {
   socket.on('connect', () => {
     loadChats();
     if (state.activeChatId) {
-      state.messagesByChat.delete(state.activeChatId);
-      loadMessages(state.activeChatId).then(() => {
-        if (state.activeChatId) renderMessages(state.activeChatId);
+      const activeId = Number(state.activeChatId);
+      loadMessages(activeId).then(() => {
+        if (Number(state.activeChatId) === activeId) renderMessages(activeId);
       });
     }
   });

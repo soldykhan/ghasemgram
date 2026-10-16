@@ -71,7 +71,8 @@
     .header-actions {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
+      flex-wrap: wrap;
     }
 
     .badge-admin {
@@ -109,6 +110,9 @@
     .btn-danger { background: var(--danger); color: #fff; }
     .btn-danger:hover { background: var(--danger-hover); }
 
+    .btn-warning { background: var(--warning); color: #fff; }
+    .btn-warning:hover { background: #d35400; }
+
     .btn-outline {
       background: transparent;
       border: 1px solid var(--border);
@@ -141,7 +145,7 @@
       border: 1px solid var(--border);
       border-radius: 16px;
       width: 100%;
-      max-width: 420px;
+      max-width: 440px;
       padding: 36px 30px;
       box-shadow: 0 12px 40px rgba(0,0,0,0.4);
       text-align: center;
@@ -197,14 +201,16 @@
       font-size: 13px;
       margin-bottom: 16px;
       text-align: right;
+      line-height: 1.6;
     }
     .alert-danger { background: rgba(231, 76, 60, 0.2); border: 1px solid var(--danger); color: #ff7675; }
     .alert-success { background: rgba(46, 204, 113, 0.2); border: 1px solid var(--success); color: #55efc4; }
+    .alert-warning { background: var(--warning-bg); border: 1px solid var(--warning); color: #f1c40f; }
 
     /* کارت‌های آمار */
     .stats-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       gap: 16px;
       margin-bottom: 24px;
     }
@@ -213,15 +219,15 @@
       background: var(--bg-card);
       border: 1px solid var(--border);
       border-radius: 12px;
-      padding: 20px;
+      padding: 18px 20px;
       display: flex;
       align-items: center;
       gap: 16px;
     }
 
     .stat-icon {
-      width: 52px;
-      height: 52px;
+      width: 50px;
+      height: 50px;
       border-radius: 12px;
       display: flex;
       align-items: center;
@@ -232,9 +238,10 @@
 
     .stat-icon.pending { background: rgba(243, 156, 18, 0.18); color: var(--warning); fill: var(--warning); }
     .stat-icon.approved { background: rgba(46, 204, 113, 0.18); color: var(--success); fill: var(--success); }
+    .stat-icon.banned { background: rgba(231, 76, 60, 0.18); color: var(--danger); fill: var(--danger); }
     .stat-icon.total { background: rgba(36, 129, 204, 0.18); color: var(--primary); fill: var(--primary); }
 
-    .stat-info .stat-val { font-size: 26px; font-weight: 800; line-height: 1.1; margin-bottom: 4px; }
+    .stat-info .stat-val { font-size: 24px; font-weight: 800; line-height: 1.1; margin-bottom: 4px; }
     .stat-info .stat-lbl { font-size: 13px; color: var(--text-muted); }
 
     /* تب‌ها */
@@ -244,6 +251,7 @@
       border-bottom: 1px solid var(--border);
       margin-bottom: 20px;
       padding-bottom: 2px;
+      overflow-x: auto;
     }
 
     .tab-btn {
@@ -261,6 +269,7 @@
       align-items: center;
       gap: 8px;
       transition: color .15s ease;
+      white-space: nowrap;
     }
     .tab-btn:hover { color: #fff; }
     .tab-btn.active { color: var(--primary); }
@@ -284,6 +293,30 @@
       border-radius: 10px;
     }
 
+    /* نوار جستجوی کاربران */
+    .search-filter-bar {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+      align-items: center;
+    }
+    .search-input-wrap {
+      flex: 1;
+      position: relative;
+    }
+    .search-input-wrap input {
+      width: 100%;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 16px;
+      font-family: var(--font);
+      font-size: 14px;
+      color: #fff;
+      outline: none;
+    }
+    .search-input-wrap input:focus { border-color: var(--primary); }
+
     /* کارت‌های کاربران */
     .user-list {
       display: flex;
@@ -301,6 +334,7 @@
       justify-content: space-between;
       gap: 16px;
       transition: border-color .15s ease;
+      flex-wrap: wrap;
     }
     .user-card:hover { border-color: rgba(36, 129, 204, 0.4); }
 
@@ -308,6 +342,7 @@
       display: flex;
       align-items: center;
       gap: 14px;
+      min-width: 220px;
     }
 
     .u-avatar {
@@ -334,7 +369,23 @@
       display: flex;
       align-items: center;
       gap: 8px;
+      flex-wrap: wrap;
     }
+
+    /* برچسب‌های وضعیت */
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 10px;
+      border-radius: 16px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .status-badge.approved { background: rgba(46, 204, 113, 0.18); color: var(--success); }
+    .status-badge.pending { background: rgba(243, 156, 18, 0.18); color: var(--warning); }
+    .status-badge.banned { background: rgba(231, 76, 60, 0.2); color: #ff7675; }
+    .status-badge.temp-banned { background: rgba(230, 126, 34, 0.2); color: #e67e22; }
 
     .empty-state {
       background: var(--bg-card);
@@ -347,12 +398,53 @@
     .empty-state svg { width: 52px; height: 52px; fill: var(--text-muted); opacity: .6; margin-bottom: 12px; }
     .empty-state h3 { font-size: 16px; color: #fff; margin-bottom: 6px; }
 
+    /* بخش مدیریت سفیر */
+    .safir-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 20px;
+    }
+    .safir-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 24px;
+    }
+    .safir-card h3 {
+      font-size: 16px;
+      font-weight: 800;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #fff;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 10px;
+    }
+    .safir-avatar-preview {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #2AABEE, #229ED9);
+      margin: 0 auto 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 28px;
+      font-weight: 700;
+      overflow: hidden;
+      border: 3px solid rgba(255,255,255,0.2);
+      cursor: pointer;
+    }
+    .safir-avatar-preview img { width: 100%; height: 100%; object-fit: cover; }
+
     /* مودال */
     .modal-overlay {
       position: fixed;
       inset: 0;
-      background: rgba(0,0,0,0.65);
-      backdrop-filter: blur(3px);
+      background: rgba(0,0,0,0.72);
+      backdrop-filter: blur(4px);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -364,9 +456,10 @@
       border: 1px solid var(--border);
       border-radius: 16px;
       width: 100%;
-      max-width: 440px;
+      max-width: 480px;
       padding: 24px 28px;
       box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+      animation: fadeIn .18s ease-out;
     }
     .modal-header {
       display: flex;
@@ -385,7 +478,6 @@
       cursor: pointer;
     }
 
-    /* تست و پیام‌ها */
     #toast {
       position: fixed;
       bottom: 24px;
@@ -403,6 +495,7 @@
       opacity: 0;
       pointer-events: none;
       transition: opacity .2s ease;
+      text-align: center;
     }
     #toast.show { opacity: 1; pointer-events: auto; }
 
@@ -414,7 +507,7 @@
 </head>
 <body>
 
-  <!-- هدر پنل (فقط وقتی لاگین است نمایش داده می‌شود) -->
+  <!-- هدر پنل -->
   <header class="admin-header hidden" id="admin-header">
     <div class="header-brand">
       <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
@@ -422,20 +515,21 @@
     </div>
     <div class="header-actions">
       <span class="badge-admin" id="admin-user-badge">مدیر</span>
+      <button class="btn btn-outline btn-sm" id="btn-open-recovery">🔐 کلید بازیابی (.txt)</button>
       <button class="btn btn-outline btn-sm" id="btn-open-creds">🔑 تغییر مشخصات</button>
-      <a href="/" target="_blank" class="btn btn-outline btn-sm">💬 پیام‌رسان</a>
+      <a href="/" target="_blank" class="btn btn-outline btn-sm">💬 رفتن به پیام‌رسان</a>
       <button class="btn btn-danger btn-sm" id="btn-logout">خروج</button>
     </div>
   </header>
 
-  <!-- صفحه راه‌اندازی اولیه (تنظیم اولین یوزر و پسورد ادمین) -->
+  <!-- صفحه راه‌اندازی اولیه -->
   <div class="auth-card-wrap hidden" id="view-setup">
     <div class="auth-card">
       <div class="logo-icon">
         <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
       </div>
       <h2>راه‌اندازی اولیه پنل مدیر</h2>
-      <p>این نخستین ورود به پنل مدیریت است. لطفاً نام کاربری و رمز عبور اصلی مدیریت قاسم‌گرام را تعیین فرمایید.</p>
+      <p>این نخستین ورود به پنل مدیریت است. لطفاً نام کاربری و رمز عبور اصلی مدیریت قاسم‌گرام را تعیین فرمایید. کلید بازیابی امنیتی ۱۰,۰۰۰ کاراکتری به صورت خودکار تولید خواهد شد.</p>
       
       <div id="setup-alert" class="alert alert-danger hidden"></div>
 
@@ -457,14 +551,14 @@
     </div>
   </div>
 
-  <!-- صفحه ورود ادمین (اگر قبلا راه‌اندازی شده) -->
+  <!-- صفحه ورود ادمین -->
   <div class="auth-card-wrap hidden" id="view-login">
     <div class="auth-card">
       <div class="logo-icon">
         <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
       </div>
       <h2>ورود به پنل مدیریت</h2>
-      <p>جهت بررسی و تایید کاربران جدید، با مشخصات ادمین وارد شوید.</p>
+      <p>جهت بررسی و تایید کاربران و مدیریت پیام‌رسان، وارد شوید.</p>
       
       <div id="login-alert" class="alert alert-danger hidden"></div>
 
@@ -479,8 +573,8 @@
         </div>
         <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 10px; padding: 12px;">ورود به پنل مدیریت</button>
         <div style="margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px;">
-          <button type="button" class="btn btn-outline btn-sm" id="btn-reset-admin" style="width: 100%; color: #ff7675; border-color: rgba(231,76,60,0.3);">
-            🔄 فراموشی رمز / بازنشانی و راه‌اندازی مجدد مدیر
+          <button type="button" class="btn btn-outline btn-sm" id="btn-open-recovery-reset" style="width: 100%; color: #64b5f6; border-color: rgba(36,129,204,0.4);">
+            🔐 فراموشی رمز / بازیابی فقط با آپلود فایل کلید (.txt)
           </button>
         </div>
       </form>
@@ -506,7 +600,16 @@
         </div>
         <div class="stat-info">
           <div class="stat-val" id="stat-approved">۰</div>
-          <div class="stat-lbl">کاربران تایید شده</div>
+          <div class="stat-lbl">کاربران فعال</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon banned">
+          <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11H7v-2h10v2z"/></svg>
+        </div>
+        <div class="stat-info">
+          <div class="stat-val" id="stat-banned">۰</div>
+          <div class="stat-lbl">کاربران مسدود (بن)</div>
         </div>
       </div>
       <div class="stat-card">
@@ -515,36 +618,188 @@
         </div>
         <div class="stat-info">
           <div class="stat-val" id="stat-total">۰</div>
-          <div class="stat-lbl">کل کاربران پیام‌رسان</div>
+          <div class="stat-lbl">کل کاربران</div>
         </div>
       </div>
     </div>
 
-    <!-- تب‌های کاربران -->
+    <!-- تب‌های ناوبری داشبورد -->
     <div class="tabs-bar">
-      <button class="tab-btn active" id="tab-pending-btn" onclick="switchTab('pending')">
+      <button class="tab-btn active" id="tab-pending-btn" onclick="switchMainTab('pending')">
         <span>در انتظار تایید</span>
         <span class="tab-badge" id="tab-badge-pending">۰</span>
       </button>
-      <button class="tab-btn" id="tab-approved-btn" onclick="switchTab('approved')">
-        <span>کاربران تایید شده</span>
+      <button class="tab-btn" id="tab-users-btn" onclick="switchMainTab('users')">
+        <span>مدیریت کاربران و مسدودسازی</span>
+      </button>
+      <button class="tab-btn" id="tab-safir-btn" onclick="switchMainTab('safir')">
+        <span>مدیریت سفیر و پیام‌رسانی</span>
       </button>
     </div>
 
-    <!-- لیست کاربران در انتظار تایید -->
+    <!-- بخش ۱: کاربران در انتظار تایید -->
     <section id="pane-pending">
-      <div class="user-list" id="pending-users-list">
-        <!-- داینامیک توسط جاوااسکریپت پر می‌شود -->
-      </div>
+      <div class="user-list" id="pending-users-list"></div>
     </section>
 
-    <!-- لیست کاربران تایید شده -->
-    <section id="pane-approved" class="hidden">
-      <div class="user-list" id="approved-users-list">
-        <!-- داینامیک توسط جاوااسکریپت پر می‌شود -->
+    <!-- بخش ۲: مدیریت تمام کاربران با جستجو و بن -->
+    <section id="pane-users" class="hidden">
+      <div class="search-filter-bar">
+        <div class="search-input-wrap">
+          <input type="text" id="user-search-input" placeholder="🔍 جستجو بر اساس نام نمایشی یا نام کاربری...">
+        </div>
+      </div>
+      <div class="user-list" id="all-users-list"></div>
+    </section>
+
+    <!-- بخش ۳: مدیریت سفیر -->
+    <section id="pane-safir" class="hidden">
+      <div class="safir-grid">
+        <!-- ویرایش پروفایل سفیر -->
+        <div class="safir-card">
+          <h3>👤 مشخصات و پروفایل سفیر</h3>
+          <div class="safir-avatar-preview" id="safir-avatar-preview" title="کلیک برای تغییر عکس">
+            <span id="safir-avatar-char">س</span>
+          </div>
+          <input type="file" id="safir-avatar-input" accept="image/*" class="hidden">
+          <form id="form-safir-profile">
+            <div class="form-group">
+              <label for="safir-name-input">نام نمایشی سفیر</label>
+              <input type="text" id="safir-name-input" class="form-control" required>
+            </div>
+            <div class="form-group">
+              <label for="safir-bio-input">بیوگرافی سفیر</label>
+              <textarea id="safir-bio-input" class="form-control" rows="2" placeholder="درباره سفیر..."></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary" style="width:100%;">ذخیره تغییرات سفیر</button>
+          </form>
+        </div>
+
+        <!-- پیام همگانی سفیر -->
+        <div class="safir-card">
+          <h3>📢 ارسال پیام همگانی (Broadcast)</h3>
+          <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.6;">
+            این پیام به عنوان سفیر در چت خصوصی تک‌تک کاربران ثبت‌نام‌شده ارسال خواهد شد.
+          </p>
+          <form id="form-safir-broadcast">
+            <div class="form-group">
+              <label for="safir-broadcast-text">متن پیام همگانی</label>
+              <textarea id="safir-broadcast-text" class="form-control" rows="4" placeholder="پیام خود را بنویسید..." required></textarea>
+            </div>
+            <button type="submit" class="btn btn-warning" style="width:100%;">🚀 ارسال به همه کاربران</button>
+          </form>
+        </div>
+
+        <!-- پیام به کاربر خاص -->
+        <div class="safir-card" style="grid-column: 1 / -1;">
+          <h3>✉️ ارسال پیام به یک شخص خاص</h3>
+          <form id="form-safir-direct">
+            <div class="form-group">
+              <label for="safir-target-user">انتخاب کاربر مقصد</label>
+              <select id="safir-target-user" class="form-control" required>
+                <option value="">در حال بارگذاری کاربران...</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="safir-direct-text">متن پیام سفیر برای این کاربر</label>
+              <textarea id="safir-direct-text" class="form-control" rows="3" placeholder="پیام اختصاصی سفیر برای کاربر انتخاب‌شده..." required></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">ارسال پیام اختصاصی</button>
+          </form>
+        </div>
       </div>
     </section>
   </main>
+
+  <!-- مودال مدیریت کلید بازیابی (.txt) -->
+  <div class="modal-overlay hidden" id="modal-recovery">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>🔐 کلید بازیابی اضطراری ادمین</h3>
+        <button class="modal-close" onclick="closeRecoveryModal()">✕</button>
+      </div>
+      <div class="alert alert-warning">
+        ⚠️ <b>توجه مهم امنیتی:</b> این کلید شامل ۱۰,۰۰۰ کاراکتر امنیتی است. در صورتی که رمز عبور ادمین را فراموش کنید، <b>تنها راه</b> بازنشانی رمز، آپلود این فایل تکست خواهد بود. آن را در جای امنی ذخیره نمایید.
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 18px;">
+        <button type="button" class="btn btn-success" id="btn-download-recovery-key" style="padding: 12px;">
+          📥 دانلود فایل کلید بازیابی (.txt)
+        </button>
+        <button type="button" class="btn btn-outline" id="btn-regenerate-recovery-key" style="color: #ff7675; border-color: rgba(231,76,60,0.4); padding: 10px;">
+          🔄 ابطال و تولید مجدد کلید بازیابی (Reset Key)
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- مودال بازیابی رمز با فایل تکست (صفحه لاگین) -->
+  <div class="modal-overlay hidden" id="modal-recovery-reset">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>🔑 بازیابی حساب مدیریت با فایل کلید</h3>
+        <button class="modal-close" onclick="closeRecoveryResetModal()">✕</button>
+      </div>
+      <div id="recovery-reset-alert" class="alert alert-danger hidden"></div>
+      <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px; line-height: 1.6;">
+        جهت اثبات هویت مدیر، فایل تکست کلید بازیابی ۱۰,۰۰۰ کاراکتری را که قبلاً دانلود کرده‌اید آپلود کنید.
+      </p>
+      <form id="form-recovery-reset">
+        <div class="form-group">
+          <label for="recovery-file-input">فایل کلید بازیابی (.txt) الزامی</label>
+          <input type="file" id="recovery-file-input" accept=".txt" class="form-control" required>
+        </div>
+        <div class="form-group">
+          <label for="recovery-new-username">نام کاربری جدید مدیر</label>
+          <input type="text" id="recovery-new-username" class="form-control" placeholder="admin" required minlength="3">
+        </div>
+        <div class="form-group">
+          <label for="recovery-new-password">رمز عبور جدید مدیر</label>
+          <input type="password" id="recovery-new-password" class="form-control" placeholder="حداقل ۶ کاراکتر" required minlength="6">
+        </div>
+        <div style="display: flex; gap: 10px; margin-top: 20px;">
+          <button type="submit" class="btn btn-primary" style="flex: 1;">بازیابی و تایید اطلاعات</button>
+          <button type="button" class="btn btn-outline" onclick="closeRecoveryResetModal()">انصراف</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- مودال بن موقت (تایم‌دار) -->
+  <div class="modal-overlay hidden" id="modal-temp-ban">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>⏱ مسدودسازی موقت کاربر</h3>
+        <button class="modal-close" onclick="closeTempBanModal()">✕</button>
+      </div>
+      <p style="font-size: 13.5px; color: #fff; margin-bottom: 14px;" id="temp-ban-username-label">
+        کاربر مقصد: -
+      </p>
+      <form id="form-temp-ban">
+        <input type="hidden" id="temp-ban-user-id">
+        <div class="form-group">
+          <label for="temp-ban-duration">مدت زمان مسدودیت موقت</label>
+          <select id="temp-ban-duration" class="form-control">
+            <option value="1">۱ ساعت</option>
+            <option value="6">۶ ساعت</option>
+            <option value="12">۱۲ ساعت</option>
+            <option value="24" selected>۱ روز (۲۴ ساعت)</option>
+            <option value="72">۳ روز</option>
+            <option value="168">۱ هفته (۷ روز)</option>
+            <option value="720">۱ ماه (۳۰ روز)</option>
+            <option value="custom">مدت زمان دلخواه (به ساعت)...</option>
+          </select>
+        </div>
+        <div class="form-group hidden" id="custom-hours-group">
+          <label for="temp-ban-custom-hours">تعداد ساعت دلخواه</label>
+          <input type="number" id="temp-ban-custom-hours" class="form-control" min="1" placeholder="مثلاً ۴۸">
+        </div>
+        <div style="display: flex; gap: 10px; margin-top: 20px;">
+          <button type="submit" class="btn btn-warning" style="flex: 1;">اعمال بن موقت و اخراج کاربر</button>
+          <button type="button" class="btn btn-outline" onclick="closeTempBanModal()">انصراف</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
   <!-- مودال تغییر نام کاربری و رمز عبور ادمین -->
   <div class="modal-overlay hidden" id="modal-creds">
@@ -581,8 +836,10 @@
     const API = '/api';
     let token = localStorage.getItem('gg_admin_token') || '';
     let currentAdminUsername = '';
+    let allUsers = [];
     let pendingUsers = [];
-    let approvedUsers = [];
+    let safirData = null;
+    let selectedSafirAvatarFile = null;
 
     function $(sel) { return document.querySelector(sel); }
 
@@ -590,11 +847,12 @@
       const t = $('#toast');
       t.textContent = msg;
       t.classList.add('show');
-      setTimeout(() => t.classList.remove('show'), 3500);
+      setTimeout(() => t.classList.remove('show'), 3800);
     }
 
     async function req(path, opts = {}) {
-      const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+      const headers = { ...(opts.headers || {}) };
+      if (!opts.isFormData) headers['Content-Type'] = 'application/json';
       if (token) headers['Authorization'] = 'Bearer ' + token;
       const res = await fetch(API + path, { ...opts, headers });
       const data = await res.json().catch(() => ({}));
@@ -602,7 +860,6 @@
       return data;
     }
 
-    // بررسی اولیه و لود صفحه مناسب
     async function init() {
       try {
         const s = await req('/admin/status');
@@ -635,21 +892,25 @@
       showView('dashboard');
       $('#admin-user-badge').textContent = '@' + currentAdminUsername;
       await loadUsers();
+      await loadSafir();
     }
 
-    async function loadUsers() {
+    async function loadUsers(searchQuery = '') {
       try {
-        const data = await req('/admin/users');
+        const q = searchQuery ? `?q=${encodeURIComponent(searchQuery)}` : '';
+        const data = await req('/admin/users' + q);
+        allUsers = data.users || [];
         pendingUsers = data.pending || [];
-        approvedUsers = data.approved || [];
 
         $('#stat-pending').textContent = data.stats?.pending_count || 0;
         $('#stat-approved').textContent = data.stats?.approved_count || 0;
+        $('#stat-banned').textContent = data.stats?.banned_count || 0;
         $('#stat-total').textContent = data.stats?.total_users || 0;
         $('#tab-badge-pending').textContent = pendingUsers.length;
 
         renderPendingUsers();
-        renderApprovedUsers();
+        renderAllUsers();
+        populateSafirUserSelect();
       } catch (err) {
         showToast(err.message);
       }
@@ -691,38 +952,93 @@
       `).join('');
     }
 
-    function renderApprovedUsers() {
-      const box = $('#approved-users-list');
-      if (!approvedUsers.length) {
-        box.innerHTML = `<div class="empty-state"><p>هنوز کاربری تایید نشده است.</p></div>`;
+    function renderAllUsers() {
+      const box = $('#all-users-list');
+      if (!allUsers.length) {
+        box.innerHTML = `<div class="empty-state"><p>کاربری یافت نشد.</p></div>`;
         return;
       }
 
-      box.innerHTML = approvedUsers.map(u => `
-        <div class="user-card">
-          <div class="user-card-main">
-            <div class="u-avatar">
-              ${u.avatar_url ? `<img src="${u.avatar_url}" alt="">` : (u.display_name ? u.display_name.slice(0, 2) : '👤')}
+      box.innerHTML = allUsers.map(u => {
+        let badgeHtml = '';
+        let banBtnHtml = '';
+
+        if (u.status === 'banned') {
+          badgeHtml = `<span class="status-badge banned">🚫 بن دائمی</span>`;
+          banBtnHtml = `<button class="btn btn-outline btn-sm" style="color:var(--success); border-color:var(--success);" onclick="unbanUser(${u.id}, '${escapeHtml(u.display_name)}')">🔓 رفع مسدودیت (آن‌بن)</button>`;
+        } else if (u.status === 'temp_banned') {
+          badgeHtml = `<span class="status-badge temp-banned">⏱ بن موقت (${escapeHtml(u.banned_remaining || 'فعال')})</span>`;
+          banBtnHtml = `<button class="btn btn-outline btn-sm" style="color:var(--success); border-color:var(--success);" onclick="unbanUser(${u.id}, '${escapeHtml(u.display_name)}')">🔓 رفع مسدودیت (آن‌بن)</button>`;
+        } else if (u.status === 'pending') {
+          badgeHtml = `<span class="status-badge pending">⏳ در انتظار تایید</span>`;
+          banBtnHtml = `
+            <button class="btn btn-success btn-sm" onclick="approveUser(${u.id}, '${escapeHtml(u.display_name)}')">تایید</button>
+            <button class="btn btn-danger btn-sm" onclick="rejectUser(${u.id}, '${escapeHtml(u.display_name)}')">رد</button>
+          `;
+        } else {
+          badgeHtml = `<span class="status-badge approved">✓ فعال</span>`;
+          banBtnHtml = `
+            <button class="btn btn-warning btn-sm" onclick="openTempBanModal(${u.id}, '${escapeHtml(u.display_name)}')">⏱ بن موقت</button>
+            <button class="btn btn-danger btn-sm" onclick="banPermanentUser(${u.id}, '${escapeHtml(u.display_name)}')">🚫 بن دائمی</button>
+          `;
+        }
+
+        return `
+          <div class="user-card" data-uid="${u.id}">
+            <div class="user-card-main">
+              <div class="u-avatar">
+                ${u.avatar_url ? `<img src="${u.avatar_url}" alt="">` : (u.display_name ? u.display_name.slice(0, 2) : '👤')}
+              </div>
+              <div class="u-details">
+                <div class="u-name">${escapeHtml(u.display_name)}</div>
+                <div class="u-uname">@${escapeHtml(u.username)}</div>
+                <div class="u-meta">ثبت‌نام: ${formatDate(u.created_at)}</div>
+              </div>
             </div>
-            <div class="u-details">
-              <div class="u-name">${escapeHtml(u.display_name)}</div>
-              <div class="u-uname">@${escapeHtml(u.username)}</div>
-              <div class="u-meta">تایید شده · ثبت‌نام: ${formatDate(u.created_at)}</div>
+            <div class="user-card-actions">
+              ${badgeHtml}
+              ${banBtnHtml}
             </div>
           </div>
-          <div class="user-card-actions">
-            <span style="color: var(--success); font-size: 13px; font-weight: 700;">فعال ✓</span>
-          </div>
-        </div>
-      `).join('');
+        `;
+      }).join('');
+    }
+
+    function populateSafirUserSelect() {
+      const sel = $('#safir-target-user');
+      if (!sel) return;
+      const validUsers = allUsers.filter(u => u.username !== 'safir');
+      if (!validUsers.length) {
+        sel.innerHTML = '<option value="">هیچ کاربری یافت نشد</option>';
+        return;
+      }
+      sel.innerHTML = '<option value="">-- لطفاً یک کاربر را انتخاب کنید --</option>' +
+        validUsers.map(u => `<option value="${u.id}">${escapeHtml(u.display_name)} (@${escapeHtml(u.username)})</option>`).join('');
+    }
+
+    async function loadSafir() {
+      try {
+        const data = await req('/admin/safir');
+        safirData = data.safir;
+        $('#safir-name-input').value = safirData.display_name || '';
+        $('#safir-bio-input').value = safirData.bio || '';
+        const prev = $('#safir-avatar-preview');
+        if (safirData.avatar_url) {
+          prev.innerHTML = `<img src="${safirData.avatar_url}" alt="سفیر">`;
+        } else {
+          prev.innerHTML = `<span>${(safirData.display_name || 'س').slice(0, 1)}</span>`;
+        }
+      } catch (err) {
+        console.error('Failed to load safir:', err);
+      }
     }
 
     async function approveUser(id, name) {
-      if (!confirm(`آیا از تایید حساب کاربر «${name}» اطمینان دارید؟\nپس از تایید، ربات سفیر بلافاصله پیام تایید را ارسال و حساب کاربر فعال می‌شود.`)) return;
+      if (!confirm(`آیا از تایید حساب کاربر «${name}» اطمینان دارید؟`)) return;
       try {
         await req(`/admin/users/${id}/approve`, { method: 'POST' });
-        showToast(`کاربر «${name}» تایید شد و ربات سفیر به او پیام داد ✅`);
-        await loadUsers();
+        showToast(`کاربر «${name}» تایید شد ✅`);
+        await loadUsers($('#user-search-input').value.trim());
       } catch (err) {
         showToast(err.message);
       }
@@ -733,18 +1049,244 @@
       try {
         await req(`/admin/users/${id}/reject`, { method: 'POST' });
         showToast(`کاربر «${name}» رد شد ❌`);
-        await loadUsers();
+        await loadUsers($('#user-search-input').value.trim());
       } catch (err) {
         showToast(err.message);
       }
     }
 
-    function switchTab(tab) {
-      $('#tab-pending-btn').classList.toggle('active', tab === 'pending');
-      $('#tab-approved-btn').classList.toggle('active', tab === 'approved');
-      $('#pane-pending').classList.toggle('hidden', tab !== 'pending');
-      $('#pane-approved').classList.toggle('hidden', tab !== 'approved');
+    async function banPermanentUser(id, name) {
+      if (!confirm(`آیا از بن دائمی کاربر «${name}» اطمینان دارید؟\nاین کاربر فوراً از تمامی دستگاه‌ها خارج شده و امکان ورود مجدد را نخواهد داشت.`)) return;
+      try {
+        await req(`/admin/users/${id}/ban-permanent`, { method: 'POST' });
+        showToast(`کاربر «${name}» بن دائمی شد 🚫`);
+        await loadUsers($('#user-search-input').value.trim());
+      } catch (err) {
+        showToast(err.message);
+      }
     }
+
+    function openTempBanModal(id, name) {
+      $('#temp-ban-user-id').value = id;
+      $('#temp-ban-username-label').textContent = `مسدودسازی موقت کاربر: «${name}»`;
+      $('#temp-ban-duration').value = '24';
+      $('#custom-hours-group').classList.add('hidden');
+      $('#modal-temp-ban').classList.remove('hidden');
+    }
+
+    function closeTempBanModal() {
+      $('#modal-temp-ban').classList.add('hidden');
+    }
+
+    $('#temp-ban-duration').addEventListener('change', (e) => {
+      $('#custom-hours-group').classList.toggle('hidden', e.target.value !== 'custom');
+    });
+
+    $('#form-temp-ban').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const id = $('#temp-ban-user-id').value;
+      const durType = $('#temp-ban-duration').value;
+      let hours = Number(durType);
+      if (durType === 'custom') {
+        hours = Number($('#temp-ban-custom-hours').value);
+        if (!hours || hours <= 0) {
+          showToast('لطفاً تعداد ساعات معتبر وارد کنید.');
+          return;
+        }
+      }
+
+      try {
+        const res = await req(`/admin/users/${id}/ban-temp`, {
+          method: 'POST',
+          body: JSON.stringify({ hours }),
+        });
+        closeTempBanModal();
+        showToast(res.message || 'کاربر بن موقت شد ⏱');
+        await loadUsers($('#user-search-input').value.trim());
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+
+    async function unbanUser(id, name) {
+      if (!confirm(`آیا مایل به رفع مسدودیت (آن‌بن) کاربر «${name}» هستید؟`)) return;
+      try {
+        await req(`/admin/users/${id}/unban`, { method: 'POST' });
+        showToast(`مسدودیت کاربر «${name}» رفع شد 🔓`);
+        await loadUsers($('#user-search-input').value.trim());
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    function switchMainTab(tab) {
+      $('#tab-pending-btn').classList.toggle('active', tab === 'pending');
+      $('#tab-users-btn').classList.toggle('active', tab === 'users');
+      $('#tab-safir-btn').classList.toggle('active', tab === 'safir');
+
+      $('#pane-pending').classList.toggle('hidden', tab !== 'pending');
+      $('#pane-users').classList.toggle('hidden', tab !== 'users');
+      $('#pane-safir').classList.toggle('hidden', tab !== 'safir');
+    }
+
+    // جستجوی زنده کاربران
+    let searchDebounce = null;
+    $('#user-search-input').addEventListener('input', (e) => {
+      clearTimeout(searchDebounce);
+      searchDebounce = setTimeout(() => {
+        loadUsers(e.target.value.trim());
+      }, 250);
+    });
+
+    // مدیریت سفیر
+    $('#safir-avatar-preview').addEventListener('click', () => {
+      $('#safir-avatar-input').click();
+    });
+    $('#safir-avatar-input').addEventListener('change', (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      selectedSafirAvatarFile = f;
+      const url = URL.createObjectURL(f);
+      $('#safir-avatar-preview').innerHTML = `<img src="${url}" alt="پیش‌نمایش">`;
+    });
+
+    $('#form-safir-profile').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const displayName = $('#safir-name-input').value.trim();
+      const bio = $('#safir-bio-input').value.trim();
+
+      const fd = new FormData();
+      fd.append('display_name', displayName);
+      fd.append('bio', bio);
+      if (selectedSafirAvatarFile) {
+        fd.append('avatar', selectedSafirAvatarFile);
+      }
+
+      try {
+        const res = await req('/admin/safir', {
+          method: 'PUT',
+          isFormData: true,
+          body: fd,
+        });
+        safirData = res.safir;
+        selectedSafirAvatarFile = null;
+        showToast('پروفایل سفیر با موفقیت به‌روزرسانی شد ✅');
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+
+    // پیام همگانی سفیر
+    $('#form-safir-broadcast').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const text = $('#safir-broadcast-text').value.trim();
+      if (!confirm(`آیا از ارسال این پیام همگانی برای همه کاربران مطمئن هستید؟`)) return;
+
+      try {
+        const res = await req('/admin/safir/broadcast', {
+          method: 'POST',
+          body: JSON.stringify({ text }),
+        });
+        $('#safir-broadcast-text').value = '';
+        showToast(res.message || 'پیام همگانی ارسال شد 📢');
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+
+    // پیام اختصاصی سفیر به یک کاربر
+    $('#form-safir-direct').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const user_id = $('#safir-target-user').value;
+      const text = $('#safir-direct-text').value.trim();
+      if (!user_id) {
+        showToast('لطفاً کاربر مقصد را انتخاب کنید.');
+        return;
+      }
+
+      try {
+        const res = await req('/admin/safir/message', {
+          method: 'POST',
+          body: JSON.stringify({ user_id: Number(user_id), text }),
+        });
+        $('#safir-direct-text').value = '';
+        showToast(res.message || 'پیام سفیر ارسال شد ✉️');
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+
+    // کلید بازیابی
+    $('#btn-open-recovery').addEventListener('click', () => {
+      $('#modal-recovery').classList.remove('hidden');
+    });
+    function closeRecoveryModal() {
+      $('#modal-recovery').classList.add('hidden');
+    }
+
+    $('#btn-download-recovery-key').addEventListener('click', () => {
+      window.location.href = `${API}/admin/recovery-key/download?admin_token=${encodeURIComponent(token)}`;
+    });
+
+    $('#btn-regenerate-recovery-key').addEventListener('click', async () => {
+      if (!confirm('آیا از بازتولید کلید بازیابی اطمینان دارید؟\nبا این کار، فایل کلید قبلی شما باطل شده و فایل جدید جایگزین آن خواهد شد.')) return;
+      try {
+        await req('/admin/recovery-key/regenerate', { method: 'POST' });
+        showToast('کلید بازیابی با موفقیت ریست شد! در حال دانلود کلید جدید...');
+        window.location.href = `${API}/admin/recovery-key/download?admin_token=${encodeURIComponent(token)}`;
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+
+    // بازیابی رمز با فایل تکست (صفحه لاگین)
+    $('#btn-open-recovery-reset').addEventListener('click', () => {
+      $('#recovery-reset-alert').classList.add('hidden');
+      $('#recovery-file-input').value = '';
+      $('#recovery-new-username').value = 'admin';
+      $('#recovery-new-password').value = '';
+      $('#modal-recovery-reset').classList.remove('hidden');
+    });
+    function closeRecoveryResetModal() {
+      $('#modal-recovery-reset').classList.add('hidden');
+    }
+
+    $('#form-recovery-reset').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const alert = $('#recovery-reset-alert');
+      alert.classList.add('hidden');
+
+      const file = $('#recovery-file-input').files[0];
+      const new_username = $('#recovery-new-username').value.trim();
+      const new_password = $('#recovery-new-password').value;
+
+      if (!file) {
+        alert.textContent = 'لطفاً فایل تکست (.txt) کلید بازیابی را انتخاب فرمایید.';
+        alert.classList.remove('hidden');
+        return;
+      }
+
+      const fd = new FormData();
+      fd.append('key_file', file);
+      fd.append('new_username', new_username);
+      fd.append('new_password', new_password);
+
+      try {
+        const res = await req('/admin/recovery-reset', {
+          method: 'POST',
+          isFormData: true,
+          body: fd,
+        });
+        closeRecoveryResetModal();
+        showToast('حساب مدیریت بازیابی شد! لطفاً با رمز جدید وارد شوید ✅');
+        $('#login-username').value = new_username;
+        $('#login-password').value = '';
+        $('#login-password').focus();
+      } catch (err) {
+        alert.textContent = err.message;
+        alert.classList.remove('hidden');
+      }
+    });
 
     // راه‌اندازی اولیه
     $('#form-setup').addEventListener('submit', async (e) => {
@@ -770,7 +1312,7 @@
         token = res.token;
         localStorage.setItem('gg_admin_token', token);
         currentAdminUsername = res.admin.username;
-        showToast('راه‌اندازی با موفقیت انجام شد 🎉');
+        showToast('راه‌اندازی با موفقیت انجام شد 🎉 کلید بازیابی ۱۰,۰۰۰ کاراکتری تولید گردید.');
         showDashboard();
       } catch (err) {
         alert.textContent = err.message;
@@ -778,7 +1320,7 @@
       }
     });
 
-    // لاگین
+    // ورود به پنل
     $('#form-login').addEventListener('submit', async (e) => {
       e.preventDefault();
       const alert = $('#login-alert');
@@ -803,23 +1345,6 @@
       }
     });
 
-    // بازنشانی ادمین
-    const btnReset = $('#btn-reset-admin');
-    if (btnReset) {
-      btnReset.addEventListener('click', async () => {
-        if (!confirm('آیا مایل به بازنشانی حساب مدیر هستید؟\nبا تایید، صفحه تعیین نام کاربری و رمز عبور جدید باز می‌شود.')) return;
-        try {
-          await req('/admin/reset', { method: 'POST' });
-          token = '';
-          localStorage.removeItem('gg_admin_token');
-          showToast('حساب مدیر بازنشانی شد. اکنون اطلاعات جدید را تعیین کنید.');
-          showView('setup');
-        } catch (err) {
-          showToast(err.message);
-        }
-      });
-    }
-
     // خروج
     $('#btn-logout').addEventListener('click', async () => {
       if (!confirm('آیا از خروج از پنل مدیریت مطمئن هستید؟')) return;
@@ -832,7 +1357,7 @@
       $('#login-password').value = '';
     });
 
-    // مودال تغییر مشخصات ادمین
+    // تغییر مشخصات
     $('#btn-open-creds').addEventListener('click', () => {
       $('#creds-alert').classList.add('hidden');
       $('#creds-current-pass').value = '';
@@ -884,7 +1409,6 @@
       return d.toLocaleDateString('fa-IR') + ' - ' + d.toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' });
     }
 
-    // اجرای شروع
     init();
   </script>
 </body>

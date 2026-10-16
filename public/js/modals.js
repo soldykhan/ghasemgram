@@ -464,6 +464,99 @@ function closeSettingsDrawer() {
   }
 }
 
+/* ═══════════════ مودال دستگاه‌های من ═══════════════ */
+
+async function openDevicesModal() {
+  closeSettingsDrawer();
+  const modal = $('#modal-devices');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  await renderDevicesList();
+}
+
+async function renderDevicesList() {
+  const currentBox = $('#current-device-container');
+  const otherBox = $('#other-devices-list');
+  if (!currentBox || !otherBox) return;
+
+  currentBox.innerHTML = '<div style="color:var(--text-secondary);font-size:13px;padding:8px;">در حال بارگذاری...</div>';
+  otherBox.innerHTML = '';
+
+  try {
+    const data = await api('/sessions');
+    const sessions = data.sessions || [];
+
+    const current = sessions.find((s) => s.is_current);
+    const others = sessions.filter((s) => !s.is_current);
+
+    if (current) {
+      const dev = current.device || {};
+      const icon = dev.is_mobile ? '📱' : '💻';
+      currentBox.innerHTML = `
+        <div class="device-card current">
+          <div class="device-card-main">
+            <div class="device-icon">${icon}</div>
+            <div class="device-info">
+              <div class="device-name">${esc(dev.browser)} — ${esc(dev.os)}</div>
+              <div class="device-meta">ورود: ${dayLabel(current.created_at)} ساعت ${faTime(current.created_at)} ${current.ip ? '· ' + esc(current.ip) : ''}</div>
+            </div>
+          </div>
+          <span class="badge-current-device">نشست کنونی (آنلاین)</span>
+        </div>`;
+    } else {
+      currentBox.innerHTML = '<div class="no-devices">دستگاه کنونی یافت نشد.</div>';
+    }
+
+    if (!others.length) {
+      otherBox.innerHTML = '<div class="no-devices">هیچ دستگاه متصل دیگری وجود ندارد.</div>';
+    } else {
+      otherBox.innerHTML = others
+        .map((s) => {
+          const dev = s.device || {};
+          const icon = dev.is_mobile ? '📱' : '💻';
+          return `
+          <div class="device-card" data-sid="${s.id}">
+            <div class="device-card-main">
+              <div class="device-icon">${icon}</div>
+              <div class="device-info">
+                <div class="device-name">${esc(dev.browser)} — ${esc(dev.os)}</div>
+                <div class="device-meta">ورود: ${dayLabel(s.created_at)} ساعت ${faTime(s.created_at)} ${s.ip ? '· ' + esc(s.ip) : ''}</div>
+              </div>
+            </div>
+            <button type="button" class="btn-terminate-device" onclick="terminateSession('${s.id}')">
+              پایان اتصال
+            </button>
+          </div>`;
+        })
+        .join('');
+    }
+  } catch (e) {
+    currentBox.innerHTML = `<div class="auth-error">${esc(e.message)}</div>`;
+  }
+}
+
+async function terminateSession(id) {
+  if (!confirm('آیا از قطع اتصال این دستگاه اطمینان دارید؟')) return;
+  try {
+    await api('/sessions/' + id, { method: 'DELETE' });
+    showToast('اتصال دستگاه موردنظر بسته شد.');
+    await renderDevicesList();
+  } catch (e) {
+    showToast(e.message);
+  }
+}
+
+async function terminateOtherSessions() {
+  if (!confirm('آیا از بستن تمام دستگاه‌های دیگر اطمینان دارید؟\nتمام نشست‌های فعال دیگر بسته شده و از آن‌ها خارج خواهید شد.')) return;
+  try {
+    await api('/sessions/terminate-others', { method: 'POST' });
+    showToast('تمامی سایر دستگاه‌ها با موفقیت بسته شدند ✅');
+    await renderDevicesList();
+  } catch (e) {
+    showToast(e.message);
+  }
+}
+
 function bindSettingsDrawer() {
   $('#settings-close-btn')?.addEventListener('click', closeSettingsDrawer);
   $('#settings-backdrop')?.addEventListener('click', closeSettingsDrawer);
@@ -492,17 +585,11 @@ function bindSettingsDrawer() {
     openSavedMessages();
   });
 
-  $('#item-notifications')?.addEventListener('click', () => {
-    showToast('اعلان‌ها فعال هستند 🔔');
-  });
-
   $('#item-devices')?.addEventListener('click', () => {
-    showToast('۱ نشست فعال: مرورگر کنونی 💻');
+    openDevicesModal();
   });
 
-  $('#item-folders')?.addEventListener('click', () => {
-    showToast('پوشه‌ها و تب‌ها در بالای لیست چت فعال هستند 📁');
-  });
+  $('#btn-terminate-other-sessions')?.addEventListener('click', terminateOtherSessions);
 
   $('#item-theme')?.addEventListener('click', () => {
     toggleTheme();

@@ -51,8 +51,14 @@
 
   <!-- ═══ اپلیکیشن اصلی ═══ -->
   <div id="app-screen" class="app hidden">
+    <!-- نوار باریک وضعیت در انتظار تایید ادمین -->
+    <div id="pending-banner" class="pending-approval-banner hidden">
+      <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 14h-2v-2h2v2zm0-4h-2V7h2v5z"/></svg>
+      <span>شما در انتظار تایید ادمین هستید</span>
+    </div>
 
-    <aside class="sidebar">
+    <div class="app-main-layout">
+      <aside class="sidebar">
       <div class="sidebar-top">
         <button id="menu-btn" class="icon-btn" title="منو">
           <svg viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
@@ -182,25 +188,11 @@
               <span class="item-title">پیام‌های ذخیره‌شده</span>
               <span class="item-arrow">‹</span>
             </div>
-            <div class="settings-item" id="item-notifications">
-              <div class="item-icon-squircle green-bg">
-                <svg viewBox="0 0 24 24"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
-              </div>
-              <span class="item-title">اعلان‌ها و صداها</span>
-              <span class="item-arrow">‹</span>
-            </div>
             <div class="settings-item" id="item-devices">
               <div class="item-icon-squircle orange-bg">
                 <svg viewBox="0 0 24 24"><path d="M4 6h16v10H4zm16 12a2 2 0 002-2V6a2 2 0 00-2-2H4a2 2 0 00-2 2v10a2 2 0 002 2H0v2h24v-2z"/></svg>
               </div>
-              <span class="item-title">دستگاه‌های متصل</span>
-              <span class="item-arrow">‹</span>
-            </div>
-            <div class="settings-item" id="item-folders">
-              <div class="item-icon-squircle purple-bg">
-                <svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
-              </div>
-              <span class="item-title">پوشه‌های گفتگو</span>
+              <span class="item-title">دستگاه‌های من</span>
               <span class="item-arrow">‹</span>
             </div>
           </div>
@@ -361,6 +353,7 @@
         </div>
       </div>
     </main>
+    </div>
   </div>
 
   <!-- ═══ مودال گروه / کانال جدید ═══ -->
@@ -630,6 +623,31 @@
         <button id="confirm-cancel" class="btn-ghost">انصراف</button>
         <button id="confirm-ok" class="btn-danger">تایید</button>
       </footer>
+    </div>
+  </div>
+
+  <!-- ═══ مودال دستگاه‌های متصل (دستگاه‌های من) ═══ -->
+  <div id="modal-devices" class="modal-overlay hidden">
+    <div class="modal modal-devices">
+      <header>
+        <h3>دستگاه‌های من</h3>
+        <button class="icon-btn modal-close" data-close="modal-devices">✕</button>
+      </header>
+      <div class="modal-body">
+        <div class="terminate-all-wrap">
+          <button type="button" class="btn-danger btn-terminate-all" id="btn-terminate-other-sessions">
+            <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11H7v-2h10v2z"/></svg>
+            بستن همه دستگاه‌ها جز این دستگاه
+          </button>
+          <p class="terminate-hint">پایان دادن به سایر نشست‌ها روی تلفن همراه یا کامپیوترهای دیگر</p>
+        </div>
+
+        <div class="devices-section-title">این دستگاه (نشست کنونی)</div>
+        <div id="current-device-container"></div>
+
+        <div class="devices-section-title">سایر دستگاه‌های متصل</div>
+        <div id="other-devices-list" class="devices-list"></div>
+      </div>
     </div>
   </div>
 

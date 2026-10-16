@@ -10,10 +10,15 @@ async function loadMessages(chatId, before) {
     state.peerReads.set(chatId, Math.max(state.peerReads.get(chatId) || 0, Number(r.max_peer_read_id)));
   }
   r.messages.forEach((m) => state.seen.add(m.id));
-  const store = state.messagesByChat.get(chatId) || [];
-  if (before) store.unshift(...r.messages);
-  else store.push(...r.messages);
-  state.messagesByChat.set(chatId, store);
+  if (before) {
+    const store = state.messagesByChat.get(chatId) || [];
+    const seenIds = new Set(store.map((x) => x.id));
+    const older = r.messages.filter((x) => !seenIds.has(x.id));
+    store.unshift(...older);
+    state.messagesByChat.set(chatId, store);
+  } else {
+    state.messagesByChat.set(chatId, r.messages);
+  }
   state.noMore.set(chatId, r.messages.length < 50);
   return r.messages;
 }
@@ -250,7 +255,8 @@ function messageHTML(chat, m, prev) {
     </div>`;
   }
   if (showName) {
-    inner += `<div class="sender" style="color:${nameColor(m.sender.id)}">${esc(m.sender.display_name)}</div>`;
+    const isSafir = m.sender && (m.sender.username === 'safir' || m.sender.is_safir);
+    inner += `<div class="sender" style="color:${nameColor(m.sender.id)}">${esc(m.sender.display_name)}${isSafir ? verifiedBadgeHTML() : ''}</div>`;
   }
 
   // نظرسنجی
@@ -293,6 +299,8 @@ function messageHTML(chat, m, prev) {
 function renderMessages(chatId, opts = {}) {
   const el = $('#messages');
   if (!el) return;
+  chatId = Number(chatId);
+  if (Number(state.activeChatId) !== chatId) return;
   let arr = state.messagesByChat.get(chatId) || [];
   if (state.activeTopicId) {
     arr = arr.filter((m) => m.topic_id === state.activeTopicId);
@@ -405,7 +413,9 @@ function onIncomingMessage(m) {
   }
 
   const store = state.messagesByChat.get(m.chat_id);
-  if (store) store.push(m);
+  if (store && !store.some((x) => x.id === m.id)) {
+    store.push(m);
+  }
 
   const c = state.chats.get(m.chat_id);
   if (c) {
@@ -429,6 +439,7 @@ function onIncomingMessage(m) {
   }
 
   if (Number(m.chat_id) === Number(state.activeChatId)) {
+    if (c) c.unread_count = 0;
     if (!state.activeTopicId || m.topic_id === state.activeTopicId) {
       appendMessageNode(m);
     }

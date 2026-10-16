@@ -10,7 +10,10 @@ const canPostIn = (c) => c.type !== 'channel' || ['owner', 'admin'].includes(c.r
 
 async function loadChats() {
   const r = await api('/chats');
-  state.chats.clear();
+  const newIds = new Set(r.chats.map((c) => c.id));
+  for (const cid of state.chats.keys()) {
+    if (!newIds.has(cid)) state.chats.delete(cid);
+  }
   r.chats.forEach((c) => {
     state.chats.set(c.id, c);
     if (c.peer && c.peer.online) state.online.add(c.peer.id);
@@ -21,6 +24,19 @@ async function loadChats() {
     state.peerReads.set(c.id, peerR);
   });
   renderSidebar();
+
+  // اگر چتی فعال نیست، چت قبلاً باز شده یا چت سفیر را بازیابی و باز کن تا صفحه خالی نباشد
+  if (!state.activeChatId) {
+    const savedId = Number(localStorage.getItem('gg_active_chat') || 0);
+    if (savedId && state.chats.has(savedId)) {
+      openChat(savedId);
+    } else {
+      const safirChat = [...state.chats.values()].find((c) => c.peer && (c.peer.username === 'safir' || c.peer.is_safir));
+      if (safirChat) {
+        openChat(safirChat.id);
+      }
+    }
+  }
 }
 
 function renderSidebar() {
@@ -61,7 +77,7 @@ function renderSidebar() {
       <div class="chat-item user-item" data-user="${u.id}">
         ${avatarHTML(u)}
         <div class="ci-main">
-          <div class="ci-row"><span class="ci-name">${esc(u.display_name)}</span></div>
+          <div class="ci-row"><span class="ci-name">${esc(u.display_name)}${u.username === 'safir' ? verifiedBadgeHTML() : ''}</span></div>
           <div class="ci-row"><span class="ci-preview">@${esc(u.username)}</span></div>
         </div>
       </div>`
@@ -104,7 +120,7 @@ function chatItemHTML(c) {
 
   // پیش‌نویس خودکار چت (Auto-draft)
   const draft = localStorage.getItem('gg_draft_' + c.id);
-  let preview = 'هنوز پیامی نیست';
+  let preview = '';
   let isDraft = false;
 
   if (draft && c.id !== state.activeChatId) {
@@ -120,18 +136,24 @@ function chatItemHTML(c) {
       if (!text && lm.file) text = filePreviewTag(lm.file);
       preview = prefix + text;
     }
+    if (!preview) {
+      preview = c.unread_count > 0 ? `${faNum(c.unread_count)} پیام جدید` : 'هنوز پیامی نیست';
+    }
   }
 
   const badge = c.unread_count > 0 ? `<span class="ci-unread">${faNum(c.unread_count)}</span>` : '';
   const pin = c.pinned ? `<span class="pin-flag" title="سنجاق‌شده" style="display:inline-flex;width:14px;height:14px;vertical-align:middle;margin-inline-end:3px;">${ICONS.pin}</span>` : '';
   const muteIcon = c.is_muted ? `<span class="mute-flag" title="بی‌صدا">${ICONS.mute}</span>` : '';
 
+  const isSafir = c.peer && (c.peer.username === 'safir' || c.peer.is_safir);
+  const vBadge = isSafir ? verifiedBadgeHTML() : '';
+
   return `
   <div class="chat-item${c.id === state.activeChatId ? ' active' : ''}${c.unread_count > 0 ? ' unread' : ''}" data-id="${c.id}">
     ${av}
     <div class="ci-main">
       <div class="ci-row">
-        <span class="ci-name">${esc(chatName(c))}</span>
+        <span class="ci-name">${esc(chatName(c))}${vBadge}</span>
         <span class="ci-time">${muteIcon}${pin}${listTime(c.updated_at)}</span>
       </div>
       <div class="ci-row">
@@ -445,10 +467,13 @@ async function startPrivateChat(userId) {
 /* ═══════════════ باز کردن و نمایش گفتگو ═══════════════ */
 
 async function openChat(id) {
+  id = Number(id);
   typingPing(true);
   const seq = ++state.openSeq;
   const chat = state.chats.get(id);
   if (!chat) return;
+
+  localStorage.setItem('gg_active_chat', String(id));
 
   const curRead = Math.max(
     state.peerReads.get(id) || 0,
@@ -489,27 +514,32 @@ async function openChat(id) {
   const msgsEl = $('#messages');
   if (msgsEl) msgsEl.innerHTML = '';
 
-  if (!state.messagesByChat.has(id)) {
-    try {
-      await loadMessages(id);
-    } catch (e) {
-      if (msgsEl) msgsEl.innerHTML = `<div class="empty-chat">${esc(e.message)}</div>`;
+  if (state.messagesByChat.has(id)) {
+    renderMessages(id);
+  }
+
+  try {
+    await loadMessages(id);
+  } catch (e) {
+    if (!state.messagesByChat.has(id) && msgsEl) {
+      msgsEl.innerHTML = `<div class="empty-chat">${esc(e.message)}</div>`;
       return;
     }
-    if (seq !== state.openSeq) return;
   }
+
+  if (seq !== state.openSeq || Number(state.activeChatId) !== id) return;
   renderMessages(id);
   updateComposerForChat(chat);
   markChatReadQuiet(chat);
 }
 
 async function markChatReadQuiet(chat) {
+  chat.unread_count = 0;
+  renderSidebar();
   try {
     await api(`/chats/${chat.id}/read`, { method: 'POST' });
-    chat.unread_count = 0;
-    renderSidebar();
   } catch {
-    /* نادیده گرفتن */
+    /* نادیده گرفتن خطای شبکه */
   }
 }
 
@@ -527,7 +557,9 @@ function renderChatHeader(chat) {
     title = chat.title;
     av = avatarHTML({ id: chat.id, title: chat.title, avatar_url: chat.avatar_url, icon: chat.type === 'group' ? ICONS.group : ICONS.channel });
   }
-  el.innerHTML = `${av}<div class="cht"><div class="t">${esc(title)}</div><div class="s" id="header-sub"></div></div>`;
+  const isSafir = chat.peer && (chat.peer.username === 'safir' || chat.peer.is_safir);
+  const vBadge = isSafir ? verifiedBadgeHTML() : '';
+  el.innerHTML = `${av}<div class="cht"><div class="t">${esc(title)}${vBadge}</div><div class="s" id="header-sub"></div></div>`;
   renderChatHeaderSub(chat);
 }
 
@@ -537,7 +569,12 @@ function renderChatHeaderSub(chat) {
   if (chat.is_saved) {
     sub = 'فضای ابری شخصی برای یادداشت‌ها';
   } else if (chat.type === 'private') {
-    sub = chat.peer && (state.online.has(chat.peer.id) ? 'آنلاین' : relLastSeen(chat.peer.last_seen_at));
+    const isSafir = chat.peer && (chat.peer.username === 'safir' || chat.peer.is_safir);
+    if (isSafir) {
+      sub = 'ربات رسمی پیام‌رسان';
+    } else {
+      sub = chat.peer && (state.online.has(chat.peer.id) ? 'آنلاین' : relLastSeen(chat.peer.last_seen_at));
+    }
   } else {
     sub = `${faNum(chat.member_count)} عضو`;
   }
@@ -670,6 +707,9 @@ function closeChatView() {
   closeChatSearch();
   state.activeChatId = null;
   state.activeTopicId = null;
+  localStorage.removeItem('gg_active_chat');
+  const msgsEl = $('#messages');
+  if (msgsEl) msgsEl.innerHTML = '';
   cancelReply();
   cancelEdit();
   closeInfoPane();

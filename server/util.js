@@ -35,4 +35,60 @@ function fixFileName(name) {
   }
 }
 
-module.exports = { USERNAME_RE, hashPassword, verifyPassword, newToken, fixFileName };
+function generateRecoveryKey(length = 10000) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+[]{}|;:,.<>?';
+  const bytes = crypto.randomBytes(length);
+  let str = '';
+  for (let i = 0; i < length; i++) {
+    str += chars[bytes[i] % chars.length];
+  }
+  return str;
+}
+
+function formatRemainingBanTime(ms) {
+  if (ms <= 0) return 'کمتر از ۱ دقیقه';
+  const totalSeconds = Math.floor(ms / 1000);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+
+  const parts = [];
+  if (days > 0) parts.push(`${days} روز`);
+  if (hours > 0) parts.push(`${hours} ساعت`);
+  if (minutes > 0 && days === 0) parts.push(`${minutes} دقیقه`);
+  if (parts.length === 0) return 'کمتر از ۱ دقیقه';
+  return parts.join(' و ');
+}
+
+function parseDevice(userAgent) {
+  if (!userAgent) return { browser: 'مرورگر وب', os: 'دستگاه نامشخص', is_mobile: false };
+  const ua = String(userAgent);
+  let browser = 'مرورگر وب';
+  if (/edg/i.test(ua)) browser = 'Edge';
+  else if (/opr|opera/i.test(ua)) browser = 'Opera';
+  else if (/chrome|crios/i.test(ua)) browser = 'Chrome';
+  else if (/firefox|fxios/i.test(ua)) browser = 'Firefox';
+  else if (/safari/i.test(ua)) browser = 'Safari';
+
+  let os = 'رایانه';
+  let is_mobile = false;
+  if (/android/i.test(ua)) { os = 'اندروید'; is_mobile = true; }
+  else if (/iphone|ipad|ipod/i.test(ua)) { os = 'آیفون / آیپد'; is_mobile = true; }
+  else if (/windows nt 10/i.test(ua)) os = 'ویندوز ۱۰ / ۱۱';
+  else if (/windows/i.test(ua)) os = 'ویندوز';
+  else if (/macintosh|mac os x/i.test(ua)) os = 'مک (macOS)';
+  else if (/linux/i.test(ua)) os = 'لینوکس';
+
+  return { browser, os, is_mobile };
+}
+
+module.exports = {
+  USERNAME_RE,
+  hashPassword,
+  verifyPassword,
+  newToken,
+  fixFileName,
+  generateRecoveryKey,
+  formatRemainingBanTime,
+  parseDevice,
+};
