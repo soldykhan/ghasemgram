@@ -533,6 +533,9 @@ async function openChat(id) {
   document.body.classList.add('chat-open');
   $('#empty-state')?.classList.add('hidden');
   $('#chat-view')?.classList.remove('hidden');
+  if (window.scrollY > 0) window.scrollTo(0, 0);
+  if (document.documentElement.scrollTop > 0) document.documentElement.scrollTop = 0;
+  if (document.body.scrollTop > 0) document.body.scrollTop = 0;
   closeInfoPane();
   renderSidebar();
 
@@ -761,7 +764,7 @@ function updateComposerForChat(chat) {
     }
   }
   clearPendingFile();
-  if (canPost) $('#msg-input')?.focus();
+  if (canPost && window.innerWidth > 900) $('#msg-input')?.focus();
 }
 
 function closeChatView() {

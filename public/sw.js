@@ -3,7 +3,7 @@
  * فراهم‌کننده قابلیت‌های PWA، پشتیبانی آفلاین و زیرساخت نوتیفیکیشن
  */
 
-const CACHE_NAME = 'ghasemgram-cache-v6';
+const CACHE_NAME = 'ghasemgram-cache-v7';
 
 // لیست فایل‌های پوسته اصلی برنامه (App Shell) برای کش اولیه
 const PRECACHE_ASSETS = [
