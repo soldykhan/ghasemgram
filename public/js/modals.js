@@ -20,6 +20,17 @@ function openNewChatModal(type) {
     titleInput.value = '';
     titleInput.placeholder = type === 'group' ? 'نام گروه' : 'نام کانال';
   }
+  const usernameWrap = $('#new-channel-username-wrap');
+  const usernameInput = $('#new-channel-username');
+  if (usernameWrap) {
+    if (type === 'channel') {
+      usernameWrap.classList.remove('hidden');
+      if (usernameInput) usernameInput.value = '';
+    } else {
+      usernameWrap.classList.add('hidden');
+      if (usernameInput) usernameInput.value = '';
+    }
+  }
   const aboutInput = $('#new-chat-about');
   if (aboutInput) aboutInput.value = '';
   const filterInput = $('#member-filter');
@@ -115,11 +126,27 @@ function bindNewChatModal() {
       $('#new-chat-title')?.focus();
       return;
     }
+    const username = $('#new-channel-username')?.value.trim().toLowerCase().replace(/^@/, '');
+    if (state.newChatType === 'channel') {
+      if (!username) {
+        showToast('وارد کردن شناسه کاربری (یوزرنیم) برای کانال الزامی است');
+        $('#new-channel-username')?.focus();
+        return;
+      }
+      if (!/^[a-zA-Z0-9_]{3,24}$/.test(username)) {
+        showToast('شناسه کاربری باید بین ۳ تا ۲۴ کاراکتر انگلیسی، عدد یا زیرخط باشد');
+        $('#new-channel-username')?.focus();
+        return;
+      }
+    }
     btn.disabled = true;
     try {
       const fd = new FormData();
       fd.set('type', state.newChatType);
       fd.set('title', title);
+      if (state.newChatType === 'channel') {
+        fd.set('username', username);
+      }
       fd.set('about', $('#new-chat-about')?.value.trim() || '');
       fd.set('member_ids', JSON.stringify([...state.newChatMembers]));
       if (state.newChatAvatar) fd.set('avatar', state.newChatAvatar);
@@ -146,6 +173,17 @@ function openEditModal() {
   if (titleInp) titleInp.value = c.title;
   const aboutInp = $('#edit-about');
   if (aboutInp) aboutInp.value = c.about || '';
+  const userWrap = $('#edit-channel-username-wrap');
+  const userInp = $('#edit-channel-username');
+  if (userWrap) {
+    if (c.type === 'channel') {
+      userWrap.classList.remove('hidden');
+      if (userInp) userInp.value = c.username || '';
+    } else {
+      userWrap.classList.add('hidden');
+      if (userInp) userInp.value = '';
+    }
+  }
   const prev = $('#edit-avatar-preview');
   if (prev) {
     prev.innerHTML = avatarHTML({
@@ -174,10 +212,26 @@ function bindEditModal() {
       $('#edit-title')?.focus();
       return;
     }
+    const c = state.chats.get(chatId);
+    let username = null;
+    if (c && c.type === 'channel') {
+      username = $('#edit-channel-username')?.value.trim().toLowerCase().replace(/^@/, '');
+      if (!username) {
+        showToast('شناسه کاربری کانال الزامی است');
+        $('#edit-channel-username')?.focus();
+        return;
+      }
+      if (!/^[a-zA-Z0-9_]{3,24}$/.test(username)) {
+        showToast('شناسه کاربری باید بین ۳ تا ۲۴ کاراکتر انگلیسی، عدد یا زیرخط باشد');
+        $('#edit-channel-username')?.focus();
+        return;
+      }
+    }
     btn.disabled = true;
     try {
       const fd = new FormData();
       fd.set('title', title);
+      if (username) fd.set('username', username);
       fd.set('about', $('#edit-about')?.value.trim() || '');
       if (state.editAvatar) fd.set('avatar', state.editAvatar);
       const r = await api(`/chats/${chatId}`, { method: 'PUT', formData: fd });
@@ -664,7 +718,9 @@ function bindOverlays() {
     if (!e.target.closest('#send-popover') && !e.target.closest('#send-btn')) {
       $('#send-popover')?.classList.add('hidden');
     }
-    if (!e.target.closest('#ctx-menu')) closeMenu();
+    if (!e.target.closest('#ctx-menu') && !e.target.closest('#attach-btn')) {
+      closeMenu();
+    }
   });
 
   document.addEventListener('keydown', (e) => {
@@ -796,10 +852,10 @@ function parseInviteCode(str) {
   if (!str) return '';
   const trimmed = str.trim();
   const hashIdx = trimmed.indexOf('#join/');
-  if (hashIdx !== -1) return trimmed.slice(hashIdx + 6).replace(/[^a-zA-Z0-9_-]/g, '');
+  if (hashIdx !== -1) return trimmed.slice(hashIdx + 6).replace(/[^a-zA-Z0-9_@-]/g, '');
   const slashIdx = trimmed.lastIndexOf('/');
-  if (slashIdx !== -1) return trimmed.slice(slashIdx + 1).replace(/[^a-zA-Z0-9_-]/g, '');
-  return trimmed.replace(/[^a-zA-Z0-9_-]/g, '');
+  if (slashIdx !== -1) return trimmed.slice(slashIdx + 1).replace(/[^a-zA-Z0-9_@-]/g, '');
+  return trimmed.replace(/[^a-zA-Z0-9_@-]/g, '');
 }
 
 function openJoinModal(initialCode = '') {

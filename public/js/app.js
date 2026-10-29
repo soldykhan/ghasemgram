@@ -133,13 +133,32 @@ function connectSocket() {
 
   socket.on('message', onIncomingMessage);
 
-  socket.on('user-status-changed', async ({ status }) => {
-    if (state.me) state.me.status = status;
+  socket.on('user-status-changed', async (data) => {
+    if (state.me) {
+      if (data.status) state.me.status = data.status;
+      if (data.category_id) state.me.category_id = data.category_id;
+      if (data.is_special !== undefined) state.me.is_special = data.is_special;
+    }
     updateApprovalState();
-    if (status === 'approved') {
+    if (data.status === 'approved') {
       showToast('🎉 حساب کاربری شما توسط ادمین تایید شد! هم‌اکنون می‌توانید شروع به گفتگو کنید.');
       await loadChats();
     }
+  });
+
+  socket.on('user-category-changed', async ({ category_id }) => {
+    if (state.me) state.me.category_id = category_id;
+    await loadChats();
+    if (state.activeChatId) {
+      const c = state.chats.get(state.activeChatId);
+      if (c) {
+        updateComposerForChat(c);
+        renderChatHeader(c);
+      } else {
+        closeChatView();
+      }
+    }
+    showToast('دسته‌بندی شما توسط مدیر تغییر یافت.');
   });
 
   socket.on('session-terminated', ({ reason }) => {
@@ -389,6 +408,7 @@ function renderMediaDrawer(tab) {
       if (input) {
         input.value += emBtn.textContent;
         input.focus();
+        updateComposerButtons();
       }
       return;
     }
@@ -470,16 +490,55 @@ function bindComposer() {
     if (pop) {
       pop.classList.toggle('hidden');
       pop.style.bottom = '65px';
-      pop.style.left = '20px';
+      pop.style.left = '';
     }
   });
 
   voiceBtn?.addEventListener('click', startVoiceRecording);
   emojiBtn?.addEventListener('click', toggleMediaDrawer);
 
+  // کلیک روی دکمه سنجاق: باز شدن مستقیم فایل‌براوزر سیستم
   attachBtn?.addEventListener('click', (e) => {
+    e.preventDefault();
+    const fi = $('#file-input');
+    if (fi) {
+      fi.removeAttribute('accept');
+      fi.click();
+    }
+  });
+
+  // کلیک‌راست یا نگه‌داشتن روی سنجاق: منوی گزینه‌های پیشرفته (نظرسنجی، رسانه)
+  const openAttachMenu = (e) => {
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    const menu = $('#ctx-menu');
+    if (menu && !menu.classList.contains('hidden') && attachBtn.dataset.menuOpen === '1') {
+      closeMenu();
+      return;
+    }
     const items = [
-      { label: 'ارسال فایل و عکس', icon: ICONS.file, action: () => $('#file-input')?.click() },
+      {
+        label: 'ارسال عکس و ویدیو',
+        icon: ICONS.camera,
+        action: () => {
+          const fi = $('#file-input');
+          if (fi) {
+            fi.accept = 'image/*,video/*';
+            fi.click();
+          }
+        },
+      },
+      {
+        label: 'ارسال فایل و اسناد',
+        icon: ICONS.file,
+        action: () => {
+          const fi = $('#file-input');
+          if (fi) {
+            fi.removeAttribute('accept');
+            fi.click();
+          }
+        },
+      },
       {
         label: 'نظرسنجی جدید',
         icon: '📊',
@@ -492,8 +551,25 @@ function bindComposer() {
       },
     ];
     const rect = attachBtn.getBoundingClientRect();
-    openMenu(items, rect.left, rect.top - 80);
-  });
+    openMenu(items, rect.left, rect.top - 8, { anchorAbove: true });
+    attachBtn.dataset.menuOpen = '1';
+  };
+
+  attachBtn?.addEventListener('contextmenu', openAttachMenu);
+
+  let attachLongPressTimer = null;
+  attachBtn?.addEventListener('touchstart', (e) => {
+    attachLongPressTimer = setTimeout(() => {
+      attachLongPressTimer = null;
+      openAttachMenu(e);
+    }, 600);
+  }, { passive: true });
+  attachBtn?.addEventListener('touchend', () => {
+    if (attachLongPressTimer) clearTimeout(attachLongPressTimer);
+  }, { passive: true });
+  attachBtn?.addEventListener('touchmove', () => {
+    if (attachLongPressTimer) clearTimeout(attachLongPressTimer);
+  }, { passive: true });
 
   input?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -510,6 +586,7 @@ function bindComposer() {
   });
 
   input?.addEventListener('input', () => {
+    updateComposerButtons();
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 130) + 'px';
     typingPing(false);
@@ -525,7 +602,13 @@ function bindComposer() {
     }
 
     checkMentionAutocomplete();
+    updateComposerButtons();
   });
+
+  input?.addEventListener('keyup', updateComposerButtons);
+  input?.addEventListener('change', updateComposerButtons);
+  input?.addEventListener('paste', () => setTimeout(updateComposerButtons, 0));
+  input?.addEventListener('cut', () => setTimeout(updateComposerButtons, 0));
 
   $('#file-input')?.addEventListener('change', () => {
     const f = $('#file-input')?.files[0];
@@ -533,6 +616,8 @@ function bindComposer() {
     const fi = $('#file-input');
     if (fi) fi.value = '';
   });
+
+  updateComposerButtons();
 
   $('#messages')?.addEventListener('scroll', async () => {
     closeMenu();

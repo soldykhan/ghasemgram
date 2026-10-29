@@ -26,6 +26,9 @@ async function loadMessages(chatId, before) {
 function timeWithChecks(chat, m) {
   const t = faTime(m.created_at);
   const editedTag = m.edited_at ? '<span class="msg-edited-tag">(ویرایش)</span>' : '';
+  if (chat && chat.type === 'channel') {
+    return `${t}${editedTag}`;
+  }
   if (m.sender.id !== state.me?.id) {
     return `${t}${editedTag}`;
   }
@@ -228,9 +231,11 @@ function messageHTML(chat, m, prev) {
     return `<div class="service-msg" data-id="${m.id}"><span>${esc(m.text)}</span></div>`;
   }
 
-  const out = m.sender.id === state.me?.id;
+  const isChannel = chat?.type === 'channel';
+  const out = !isChannel && m.sender.id === state.me?.id;
   const isGroup = chat?.type === 'group';
   const grouped =
+    !isChannel &&
     !!prev &&
     prev.sender.id === m.sender.id &&
     sameDay(prev.created_at, m.created_at) &&
@@ -238,8 +243,8 @@ function messageHTML(chat, m, prev) {
     !m.reply_to &&
     !prev.reply_to &&
     !prev.is_service;
-  const showAvatar = !out && !grouped;
-  const showName = !out && isGroup && !grouped;
+  const showAvatar = !isChannel && !out && !grouped;
+  const showName = !isChannel && !out && isGroup && !grouped;
   const isVoiceOrAudio = !!(m.file && (m.is_voice || (m.file.mime && m.file.mime.startsWith('audio/'))));
   const mediaOnly = m.file && m.file.mime && /^(image|video)\//.test(m.file.mime) && !m.text && !m.poll;
 
@@ -255,8 +260,8 @@ function messageHTML(chat, m, prev) {
     </div>`;
   }
   if (showName) {
-    const isSafir = m.sender && (m.sender.username === 'safir' || m.sender.is_safir);
-    inner += `<div class="sender" style="color:${nameColor(m.sender.id)}">${esc(m.sender.display_name)}${isSafir ? verifiedBadgeHTML() : ''}</div>`;
+    const isVerified = (m.sender && (m.sender.username === 'safir' || m.sender.is_safir)) || (chat && chat.is_official);
+    inner += `<div class="sender" style="color:${nameColor(m.sender.id)}">${esc(m.sender.display_name)}${isVerified ? verifiedBadgeHTML() : ''}</div>`;
   }
 
   // نظرسنجی
@@ -286,7 +291,7 @@ function messageHTML(chat, m, prev) {
   const rxHTML = reactionsHTML(m);
 
   return `
-  <div class="msg ${out ? 'out' : 'in'}${grouped ? ' grouped' : ''}" data-id="${m.id}">
+  <div class="msg ${isChannel ? 'channel-post in' : (out ? 'out' : 'in')}${grouped ? ' grouped' : ''}" data-id="${m.id}">
     ${showAvatar ? avatarHTML(m.sender, 'msg-avatar') : ''}
     <div class="bubble${mediaOnly ? ' media' : ''}${isVoiceOrAudio ? ' voice-bubble' : ''}">
       ${inner}
@@ -454,8 +459,14 @@ function onIncomingMessage(m) {
 
 function msgMenuItems(m) {
   const chat = state.chats.get(m.chat_id);
+  const isChannel = chat?.type === 'channel';
+  const isMod = chat && ['owner', 'admin'].includes(chat.role);
+  const canPost = !isChannel || isMod;
+
   const items = [];
-  items.push({ label: 'پاسخ', icon: ICONS.reply, action: () => setReply(m) });
+  if (canPost) {
+    items.push({ label: 'پاسخ', icon: ICONS.reply, action: () => setReply(m) });
+  }
 
   // نمایش لیست سین‌کنندگان در گروه (فقط برای پیام‌های خودمان)
   if (chat && chat.type === 'group' && m.sender.id === state.me?.id) {
@@ -467,12 +478,13 @@ function msgMenuItems(m) {
   }
 
   // ویرایش پیام (Message Editing)
-  if (m.sender.id === state.me?.id && !m.poll) {
+  const canEdit = !isChannel ? (m.sender.id === state.me?.id && !m.poll) : (isMod && !m.poll);
+  if (canEdit) {
     items.push({ label: 'ویرایش', icon: ICONS.edit, action: () => startEditMessage(m) });
   }
 
   // سنجاق کردن پیام در چت (Pin Message)
-  const canPin = chat && (chat.type === 'private' || ['owner', 'admin'].includes(chat.role));
+  const canPin = chat && (chat.type === 'private' || isMod);
   if (canPin) {
     items.push({ label: 'سنجاق کردن', icon: ICONS.pin, action: () => pinMessageInChat(m.id) });
   }
@@ -494,8 +506,10 @@ function msgMenuItems(m) {
 
   items.push({ label: 'فوروارد', icon: ICONS.forward, action: () => openForwardModal(m) });
 
-  const canDelete =
-    m.sender.id === state.me?.id || (chat && chat.type !== 'private' && ['owner', 'admin'].includes(chat.role));
+  const canDelete = !isChannel
+    ? (m.sender.id === state.me?.id || (chat && chat.type !== 'private' && isMod))
+    : isMod;
+
   if (canDelete) {
     items.push({
       label: 'حذف پیام',
@@ -582,6 +596,7 @@ function startEditMessage(m) {
     input.focus();
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 130) + 'px';
+    updateComposerButtons();
   }
 }
 
@@ -592,6 +607,7 @@ function cancelEdit() {
     bar.classList.add('hidden');
     bar.innerHTML = '';
   }
+  updateComposerButtons();
 }
 
 function setReply(m) {
@@ -634,6 +650,7 @@ function setPendingFile(f) {
     <button id="ab-remove" class="icon-btn" title="حذف">✕</button>`;
   $('#ab-remove').addEventListener('click', clearPendingFile);
   $('#msg-input')?.focus();
+  updateComposerButtons();
 }
 
 function clearPendingFile() {
@@ -643,6 +660,7 @@ function clearPendingFile() {
     bar.classList.add('hidden');
     bar.innerHTML = '';
   }
+  updateComposerButtons();
 }
 
 let isSendingMessage = false;
@@ -716,6 +734,7 @@ async function sendMessage({ silent = false, scheduledAt = null } = {}) {
     input.value = text;
     if (file) setPendingFile(file);
     if (prevReply) setReply(prevReply);
+    updateComposerButtons();
   } finally {
     isSendingMessage = false;
     if (sendBtn) sendBtn.disabled = false;

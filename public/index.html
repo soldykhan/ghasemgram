@@ -21,7 +21,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/style.css?v=2.0">
 </head>
 <body>
 
@@ -212,6 +212,14 @@
               <span class="item-title">دستگاه‌های من</span>
               <span class="item-arrow">‹</span>
             </div>
+            <div class="settings-item" id="item-notifications">
+              <div class="item-icon-squircle" style="background: #e67e22;">
+                <svg viewBox="0 0 24 24"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2zm-2 1H8v-6c0-2.48 1.51-4.5 4-4.5s4 2.02 4 4.5v6z"/></svg>
+              </div>
+              <span class="item-title">اعلان‌ها و وب‌پوش</span>
+              <span class="item-value" id="settings-notif-value">بررسی...</span>
+              <span class="item-arrow">‹</span>
+            </div>
             <div class="settings-item hidden" id="item-install-pwa">
               <div class="item-icon-squircle blue-bg" style="background: var(--accent);">
                 <svg viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg>
@@ -315,23 +323,28 @@
         <div id="media-drawer" class="media-drawer hidden"></div>
 
         <footer class="composer" id="composer">
-          <div class="composer-actions-left">
-            <button id="attach-btn" class="icon-btn" title="پیوست فایل یا نظرسنجی">
-              <svg viewBox="0 0 24 24"><path d="M16.5 6v11.5a4.5 4.5 0 11-9 0V5a3 3 0 116 0v10.5a1.5 1.5 0 11-3 0V6H9v9.5a3 3 0 106 0V5a4.5 4.5 0 10-9 0v12.5a6 6 0 1012 0V6z"/></svg>
-            </button>
-            <button id="emoji-btn" class="icon-btn" title="ایموجی، استیکر و گیف">
-              <svg viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg>
-            </button>
+          <!-- سمت راست: دکمه ویس و ارسال با تغییر شکل -->
+          <div class="composer-actions-right">
+            <div class="composer-main-action" id="composer-main-action">
+              <button id="voice-btn" class="icon-btn voice-btn" type="button" title="ضبط پیام صوتی" aria-label="ضبط پیام صوتی">
+                <svg viewBox="0 0 24 24" width="24" height="24"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>
+              </button>
+              <button id="send-btn" class="icon-btn send-btn hidden" type="button" title="ارسال پیام" aria-label="ارسال پیام">
+                <svg viewBox="0 0 24 24" width="22" height="22"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+              </button>
+            </div>
           </div>
 
+          <!-- وسط: متن پیام -->
           <textarea id="msg-input" rows="1" placeholder="پیام..."></textarea>
 
-          <div class="composer-actions-right">
-            <button id="voice-btn" class="icon-btn" title="ضبط پیام صوتی">
-              <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>
+          <!-- سمت چپ: فایل و ایموجی -->
+          <div class="composer-actions-left">
+            <button id="emoji-btn" class="icon-btn" type="button" title="ایموجی، استیکر و گیف">
+              <svg viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg>
             </button>
-            <button id="send-btn" class="send-btn" title="ارسال پیام">
-              <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+            <button id="attach-btn" class="icon-btn" type="button" title="پیوست فایل یا نظرسنجی">
+              <svg viewBox="0 0 24 24"><path d="M16.5 6v11.5a4.5 4.5 0 11-9 0V5a3 3 0 116 0v10.5a1.5 1.5 0 11-3 0V6H9v9.5a3 3 0 106 0V5a4.5 4.5 0 10-9 0v12.5a6 6 0 1012 0V6z"/></svg>
             </button>
           </div>
         </footer>
@@ -393,6 +406,13 @@
         </div>
         <input type="file" id="new-avatar-input" accept="image/*" class="hidden">
         <input id="new-chat-title" placeholder="نام گروه" maxlength="80">
+        <div id="new-channel-username-wrap" class="hidden">
+          <div class="input-prefix-box">
+            <span>@</span>
+            <input id="new-channel-username" placeholder="channel_username" maxlength="24" dir="ltr" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="field-hint">شناسه عمومی کانال (الزامی، حروف انگلیسی، اعداد و _)</div>
+        </div>
         <textarea id="new-chat-about" rows="2" maxlength="300" placeholder="توضیحات (اختیاری)"></textarea>
         <input id="member-filter" placeholder="جستجوی مخاطبین...">
         <div id="member-list" class="member-list"></div>
@@ -416,6 +436,13 @@
         </div>
         <input type="file" id="edit-avatar-input" accept="image/*" class="hidden">
         <input id="edit-title" maxlength="80" placeholder="نام گفتگو">
+        <div id="edit-channel-username-wrap" class="hidden">
+          <div class="input-prefix-box">
+            <span>@</span>
+            <input id="edit-channel-username" placeholder="channel_username" maxlength="24" dir="ltr" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="field-hint">شناسه کاربری کانال</div>
+        </div>
         <textarea id="edit-about" rows="3" maxlength="300" placeholder="توضیحات"></textarea>
       </div>
       <footer>
@@ -615,13 +642,13 @@
   <div id="modal-join" class="modal-overlay hidden">
     <div class="modal">
       <header>
-        <h3>عضویت با لینک دعوت</h3>
+        <h3>پیوستن به گفتگو یا کانال</h3>
         <button class="icon-btn modal-close" data-close="modal-join">✕</button>
       </header>
       <div class="modal-body">
-        <label class="field-label" for="join-input">لینک یا کد دعوت گروه یا کانال:</label>
+        <label class="field-label" for="join-input">لینک، کد دعوت یا شناسه کانال (@username):</label>
         <div class="join-row">
-          <input id="join-input" placeholder="کد دعوت یا لینک کامل...">
+          <input id="join-input" placeholder="کد دعوت، لینک یا channel_username@...">
           <button id="join-check-btn" class="btn-ghost" type="button">بررسی</button>
         </div>
         <div id="join-preview" class="join-preview hidden"></div>
@@ -675,6 +702,39 @@
     </div>
   </div>
 
+  <!-- ═══ مودال اعلان‌ها و وب‌پوش ═══ -->
+  <div id="modal-notifications" class="modal-overlay hidden">
+    <div class="modal modal-notifications" style="max-width: 420px;">
+      <header>
+        <h3>اعلان‌ها و وب‌پوش</h3>
+        <button class="icon-btn modal-close" data-close="modal-notifications">✕</button>
+      </header>
+      <div class="modal-body" style="padding: 16px;">
+        <div class="notif-card" style="background: var(--bg-card); border-radius: 12px; padding: 14px; margin-bottom: 16px; border: 1px solid var(--border-color);">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+            <div>
+              <div style="font-weight:600; font-size:14.5px; color:var(--text-primary); margin-bottom:4px;">اعلان پیام‌های جدید (Web Push)</div>
+              <div style="font-size:12px; color:var(--text-secondary); line-height:1.5;">دریافت پیام‌ها حتی هنگامی که اپلیکیشن یا مرورگر کاملاً بسته است</div>
+            </div>
+            <label class="switch" style="position:relative; display:inline-block; width:44px; height:24px; flex-shrink:0;">
+              <input type="checkbox" id="push-toggle" style="opacity:0; width:0; height:0;">
+              <span class="slider" style="position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background-color:#ccc; transition:.3s; border-radius:24px;"></span>
+            </label>
+          </div>
+          <div id="push-permission-status" style="font-size:12px; margin-top:10px; color:var(--accent);"></div>
+          <div id="push-denied-warning" class="hidden" style="margin-top:10px; padding:8px 10px; background:rgba(231,76,60,.15); color:#e74c3c; border-radius:8px; font-size:12px; line-height:1.5;">
+            ⚠️ دسترسی اعلان‌ها در مرورگر مسدود (Block) شده است. لطفاً روی علامت قفل یا تنظیمات سایت کنار آدرس‌بار کلیک کنید و Notifications را روی Allow قرار دهید.
+          </div>
+        </div>
+
+        <button type="button" class="btn-primary" id="btn-test-push" style="width:100%; display:flex; align-items:center; justify-content:center; gap:8px;">
+          <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor;"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+          ارسال اعلان آزمایشی (تست)
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- ═══ لایت‌باکس تصویر ═══ -->
   <div id="lightbox" class="lightbox hidden"><img id="lightbox-img" alt=""></div>
 
@@ -691,14 +751,14 @@
   <div id="toast" class="toast hidden"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/js/constants.js"></script>
-  <script src="/js/state.js"></script>
-  <script src="/js/voice.js"></script>
-  <script src="/js/messages.js"></script>
-  <script src="/js/chats.js"></script>
-  <script src="/js/modals.js"></script>
-  <script src="/js/app.js"></script>
-  <script src="/js/pwa.js"></script>
+  <script src="/js/constants.js?v=2.0"></script>
+  <script src="/js/state.js?v=2.0"></script>
+  <script src="/js/voice.js?v=2.0"></script>
+  <script src="/js/messages.js?v=2.0"></script>
+  <script src="/js/chats.js?v=2.0"></script>
+  <script src="/js/modals.js?v=2.0"></script>
+  <script src="/js/app.js?v=2.0"></script>
+  <script src="/js/pwa.js?v=2.0"></script>
 </body>
 </html>
 

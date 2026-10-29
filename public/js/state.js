@@ -13,6 +13,7 @@ const state = {
   peerReads: new Map(),      // chatId -> آخرین شناسه پیام خوانده‌شده توسط هم‌صحبت‌ها
   searchQ: '',
   searchUsers: [],
+  searchChannels: [],
   searchMessages: [],        // نتایج جستجوی پیام‌ها در سراسر برنامه
   activeChatId: null,
   infoChatId: null,
@@ -163,13 +164,14 @@ function updateApprovalState() {
   const isPending = state.me && state.me.status === 'pending';
   const banner = $('#pending-banner');
   const sendBtn = $('#send-btn');
+  const voiceBtn = $('#voice-btn');
   const msgInput = $('#msg-input');
   const attachBtn = $('#attach-btn');
-  const micBtn = $('#mic-btn');
   const fabBtn = $('#fab');
 
   if (banner) banner.classList.toggle('hidden', !isPending);
   if (sendBtn) sendBtn.disabled = isPending;
+  if (voiceBtn) voiceBtn.disabled = isPending;
   if (msgInput) {
     if (isPending) {
       msgInput.disabled = true;
@@ -180,8 +182,36 @@ function updateApprovalState() {
     }
   }
   if (attachBtn) attachBtn.disabled = isPending;
-  if (micBtn) micBtn.disabled = isPending;
   if (fabBtn) fabBtn.style.pointerEvents = isPending ? 'none' : '';
+}
+
+/* ═══════════════ کنترل و انیمیشن دکمه‌های کامپوزر (Morph ویس / ارسال) ═══════════════ */
+
+function updateComposerButtons() {
+  const input = $('#msg-input');
+  const mainAction = $('#composer-main-action');
+  const sendBtn = $('#send-btn');
+  const voiceBtn = $('#voice-btn');
+  if (!mainAction && !sendBtn && !voiceBtn) return;
+
+  const textVal = (input ? input.value : '') || '';
+  const hasContent = Boolean(textVal.trim().length > 0 || state.pendingFile);
+
+  if (mainAction) {
+    mainAction.classList.toggle('has-text', hasContent);
+  }
+  if (voiceBtn) {
+    voiceBtn.classList.toggle('hidden', hasContent);
+    voiceBtn.style.display = hasContent ? 'none' : 'flex';
+    voiceBtn.setAttribute('aria-hidden', hasContent ? 'true' : 'false');
+    voiceBtn.tabIndex = hasContent ? -1 : 0;
+  }
+  if (sendBtn) {
+    sendBtn.classList.toggle('hidden', !hasContent);
+    sendBtn.style.display = hasContent ? 'flex' : 'none';
+    sendBtn.setAttribute('aria-hidden', !hasContent ? 'true' : 'false');
+    sendBtn.tabIndex = !hasContent ? -1 : 0;
+  }
 }
 
 /* ═══════════════ منوی زمینه (راست‌کلیک / لمس طولانی) ═══════════════ */
@@ -198,7 +228,7 @@ function openMenu(items, x, y, opts = {}) {
     .map(
       (it, i) => `
     <button class="ctx-item${it.danger ? ' danger' : ''}" data-i="${i}">
-      ${it.icon || ''}
+      ${it.icon ? `<span class="ctx-icon">${it.icon}</span>` : ''}
       <span>${esc(it.label)}</span>
     </button>`
     )
@@ -217,7 +247,8 @@ function openMenu(items, x, y, opts = {}) {
   }
 
   $$('.ctx-item', menu).forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
       const idx = Number(btn.dataset.i);
       closeMenu();
       items[idx]?.action?.();
@@ -227,6 +258,9 @@ function openMenu(items, x, y, opts = {}) {
   const w = menu.offsetWidth, h = menu.offsetHeight;
   const vw = window.innerWidth, vh = window.innerHeight;
   let left = x, top = y;
+  if (opts.anchorAbove) {
+    top = y - h;
+  }
   if (left + w > vw - 10) left = vw - w - 10;
   if (top + h > vh - 10) top = vh - h - 10;
   if (left < 10) left = 10;
@@ -238,6 +272,8 @@ function openMenu(items, x, y, opts = {}) {
 function closeMenu() {
   const menu = $('#ctx-menu');
   if (menu) menu.classList.add('hidden');
+  const attachBtn = $('#attach-btn');
+  if (attachBtn) attachBtn.dataset.menuOpen = '0';
 }
 
 function bindLongPress(containerSel, itemSel, handler) {

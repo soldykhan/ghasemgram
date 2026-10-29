@@ -154,6 +154,20 @@ db.exec(`
     created_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_scheduled_time ON scheduled_messages(scheduled_for);
+
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    session_token TEXT REFERENCES sessions(token) ON DELETE CASCADE,
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    user_agent TEXT,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_push_endpoint ON push_subscriptions(endpoint);
 `);
 
 // مهاجرت دیتابیس‌های ساخته‌شده با نسخه‌های قبلی
@@ -161,11 +175,28 @@ function addColumnIfMissing(table, col, ddl) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
   if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
 }
+db.exec(`
+  CREATE TABLE IF NOT EXISTS categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    description TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_categories_name ON categories(name);
+`);
+
 addColumnIfMissing('chats', 'about', 'TEXT');
 addColumnIfMissing('chats', 'invite_code', 'TEXT');
+addColumnIfMissing('chats', 'username', 'TEXT');
 addColumnIfMissing('chats', 'is_saved', 'INTEGER NOT NULL DEFAULT 0');
 addColumnIfMissing('chats', 'pinned_message_id', 'INTEGER');
 addColumnIfMissing('chats', 'topics_enabled', 'INTEGER NOT NULL DEFAULT 0');
+addColumnIfMissing('chats', 'category_id', 'INTEGER REFERENCES categories(id) ON DELETE SET NULL');
+addColumnIfMissing('chats', 'is_official', 'INTEGER NOT NULL DEFAULT 0');
+
+try {
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_chats_username ON chats(username) WHERE username IS NOT NULL;');
+} catch {}
 
 addColumnIfMissing('messages', 'reply_to_id', 'INTEGER');
 addColumnIfMissing('messages', 'forward_from_id', 'INTEGER');
@@ -187,6 +218,8 @@ addColumnIfMissing('users', 'privacy_last_seen', "TEXT NOT NULL DEFAULT 'everyon
 addColumnIfMissing('users', 'status', "TEXT NOT NULL DEFAULT 'approved'");
 addColumnIfMissing('users', 'banned_until', 'INTEGER');
 addColumnIfMissing('users', 'ban_reason', 'TEXT');
+addColumnIfMissing('users', 'category_id', 'INTEGER REFERENCES categories(id) ON DELETE SET NULL');
+addColumnIfMissing('users', 'is_special', 'INTEGER NOT NULL DEFAULT 0');
 
 addColumnIfMissing('sessions', 'user_agent', 'TEXT');
 addColumnIfMissing('sessions', 'ip', 'TEXT');
@@ -234,8 +267,63 @@ function ensureSafirBot() {
 }
 ensureSafirBot();
 
+function ensureDefaultCategory() {
+  const count = db.prepare('SELECT COUNT(*) AS c FROM categories').get().c;
+  if (count === 0) {
+    db.prepare('INSERT INTO categories (name, description, created_at) VALUES (?, ?, ?)').run(
+      'عمومی',
+      'دسته‌بندی عمومی و پیش‌فرض سامانه',
+      Date.now()
+    );
+  }
+  const defaultCat = db.prepare('SELECT id FROM categories ORDER BY id ASC LIMIT 1').get();
+  if (defaultCat) {
+    db.prepare("UPDATE users SET category_id = ? WHERE category_id IS NULL AND status = 'approved' AND username != 'safir'").run(defaultCat.id);
+    db.prepare("UPDATE chats SET category_id = (SELECT category_id FROM users WHERE users.id = chats.created_by) WHERE category_id IS NULL AND is_official = 0").run();
+  }
+}
+ensureDefaultCategory();
+
+function ensureOfficialChannel() {
+  let official = db.prepare('SELECT * FROM chats WHERE is_official = 1').get();
+  const safir = ensureSafirBot();
+  const now = Date.now();
+  if (!official) {
+    const existing = db.prepare("SELECT * FROM chats WHERE title = 'کانال رسمی قاسم‌گرام'").get();
+    if (existing) {
+      db.prepare("UPDATE chats SET is_official = 1, username = COALESCE(username, 'official') WHERE id = ?").run(existing.id);
+      official = db.prepare('SELECT * FROM chats WHERE id = ?').get(existing.id);
+    } else {
+      const ownerId = safir ? Number(safir.id) : 1;
+      const info = db.prepare(`
+        INSERT INTO chats (type, title, about, username, is_official, created_by, created_at)
+        VALUES ('channel', 'کانال رسمی قاسم‌گرام', 'کانال رسمی اطلاع‌رسانی پیام‌رسان قاسم‌گرام', 'official', 1, ?, ?)
+      `).run(ownerId, now);
+      const chatId = Number(info.lastInsertRowid);
+      db.prepare("INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, 'owner', ?)").run(chatId, ownerId, now);
+      official = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+    }
+  } else if (!official.username) {
+    try {
+      db.prepare("UPDATE chats SET username = 'official' WHERE id = ?").run(official.id);
+      official.username = 'official';
+    } catch {}
+  }
+
+  if (official) {
+    db.prepare(`
+      INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at)
+      SELECT ?, id, 'member', ? FROM users WHERE status = 'approved' AND id NOT IN (
+        SELECT user_id FROM chat_members WHERE chat_id = ?
+      )
+    `).run(official.id, now, official.id);
+  }
+  return official;
+}
+ensureOfficialChannel();
+
 try {
   db.exec("UPDATE messages SET is_voice = 1 WHERE file_id IN (SELECT id FROM files WHERE mime_type LIKE 'audio/%')");
 } catch {}
 
-module.exports = { db, UPLOAD_DIR, ensureSafirBot };
+module.exports = { db, UPLOAD_DIR, ensureSafirBot, ensureDefaultCategory, ensureOfficialChannel };

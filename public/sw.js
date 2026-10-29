@@ -3,7 +3,7 @@
  * فراهم‌کننده قابلیت‌های PWA، پشتیبانی آفلاین و زیرساخت نوتیفیکیشن
  */
 
-const CACHE_NAME = 'ghasemgram-cache-v1';
+const CACHE_NAME = 'ghasemgram-cache-v6';
 
 // لیست فایل‌های پوسته اصلی برنامه (App Shell) برای کش اولیه
 const PRECACHE_ASSETS = [
@@ -17,6 +17,7 @@ const PRECACHE_ASSETS = [
   '/js/chats.js',
   '/js/modals.js',
   '/js/app.js',
+  '/js/pwa.js',
   '/manifest.json',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
@@ -94,22 +95,18 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // برای دارایی‌های استاتیک محلی (CSS, JS, Icons): Stale-While-Revalidate
+  // برای دارایی‌های استاتیک محلی (CSS, JS, Icons): اولویت با شبکه (Network First) با فال‌بک به کش در صورت آفلاین
   if (url.origin === self.location.origin) {
     event.respondWith(
-      caches.match(req).then((cached) => {
-        const fetchPromise = fetch(req)
-          .then((networkRes) => {
-            if (networkRes && networkRes.status === 200) {
-              const clone = networkRes.clone();
-              caches.open(CACHE_NAME).then((c) => c.put(req, clone));
-            }
-            return networkRes;
-          })
-          .catch(() => cached);
-
-        return cached || fetchPromise;
-      })
+      fetch(req)
+        .then((networkRes) => {
+          if (networkRes && networkRes.status === 200) {
+            const clone = networkRes.clone();
+            caches.open(CACHE_NAME).then((c) => c.put(req, clone));
+          }
+          return networkRes;
+        })
+        .catch(() => caches.match(req))
     );
     return;
   }
@@ -131,41 +128,83 @@ self.addEventListener('fetch', (event) => {
 
 // زیرساخت دریافت پوش‌نوتیفیکیشن
 self.addEventListener('push', (event) => {
+  if (!event.data) return;
+
   let data = {};
-  if (event.data) {
-    try {
-      data = event.data.json();
-    } catch {
-      data = { title: 'قاسم‌گرام', body: event.data.text() };
-    }
+  try {
+    data = event.data.json();
+  } catch {
+    data = { title: 'قاسم‌گرام', body: event.data.text() };
   }
 
   const title = data.title || 'پیام جدید در قاسم‌گرام';
+  const chatId = (data.data && data.data.chatId) || data.chatId || 0;
+  const targetUrl = (data.data && data.data.url) || data.url || (chatId ? `/#c=${chatId}` : '/');
+
   const options = {
     body: data.body || 'یک پیام جدید دریافت کردید.',
     icon: data.icon || '/icons/icon-192.png',
     badge: data.badge || '/icons/icon-192.png',
-    data: data.data || { url: '/' },
+    tag: data.tag || (chatId ? `chat-${chatId}` : 'general'),
+    renotify: data.renotify !== false,
+    vibrate: data.vibrate || [120, 60, 120],
     dir: 'rtl',
     lang: 'fa',
-    vibrate: [100, 50, 100]
+    data: {
+      url: targetUrl,
+      chatId: chatId,
+      messageId: (data.data && data.data.messageId) || data.messageId
+    },
+    actions: [
+      { action: 'open', title: 'مشاهده گفتگو' }
+    ]
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      // اگر کاربر در حال حاضر روی همین صفحه و چت فوکوس فعال دارد، نیازی به پراندن اعلان سیستمی نیست
+      const isActivelyChatting = clientList.some((c) => {
+        return c.focused && c.visibilityState === 'visible' && chatId && c.url.includes(`c=${chatId}`);
+      });
+
+      if (isActivelyChatting) {
+        // پیام را فقط به صورت داخلی برای پخش صدای سبک ارسال می‌کنیم
+        clientList.forEach((c) => {
+          c.postMessage({ type: 'INCOMING_PUSH_ACTIVE', chatId, data });
+        });
+        return;
+      }
+
+      return self.registration.showNotification(title, options);
+    })
+  );
 });
 
 // کلیک روی اعلان: باز کردن یا فوکوس روی پنجره برنامه
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const targetUrl = (event.notification.data && event.notification.data.url) || '/';
+  const notifData = event.notification.data || {};
+  const targetUrl = notifData.url || '/';
+  const chatId = notifData.chatId;
 
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (clientList) => {
+      // ۱. اگر پنجره‌ای از برنامه باز است، فوکوس کن و پیام برو به چت بفرست
       for (const client of clientList) {
-        if (client.url.includes(targetUrl) && 'focus' in client) {
-          return client.focus();
+        if (client.url.startsWith(self.location.origin) && 'focus' in client) {
+          await client.focus();
+          if (chatId) {
+            client.postMessage({
+              type: 'NAVIGATE_CHAT',
+              chatId: chatId,
+              url: targetUrl
+            });
+          }
+          return;
         }
       }
+
+      // ۲. در غیر این صورت پنجره جدید باز کن
       if (self.clients.openWindow) {
         return self.clients.openWindow(targetUrl);
       }

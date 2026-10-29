@@ -6,7 +6,12 @@ const chatName = (c) => {
   if (c.is_saved) return 'پیام‌های ذخیره‌شده';
   return c.type === 'private' ? c.peer?.display_name || 'گفتگو' : c.title;
 };
-const canPostIn = (c) => c.type !== 'channel' || ['owner', 'admin'].includes(c.role);
+const canPostIn = (c) => {
+  if (!c) return false;
+  if (c.can_send === false) return false;
+  if (c.type === 'channel') return ['owner', 'admin'].includes(c.role);
+  return true;
+};
 
 async function loadChats() {
   const r = await api('/chats');
@@ -56,6 +61,7 @@ function renderSidebar() {
       return (
         n.includes(q) ||
         (c.title ? c.title.toLowerCase().includes(q) : false) ||
+        (c.username ? c.username.toLowerCase().includes(q) : false) ||
         (c.peer && c.peer.username ? c.peer.username.toLowerCase().includes(q) : false)
       );
     });
@@ -63,8 +69,30 @@ function renderSidebar() {
   let html = '';
   if (q && chats.length) html += `<div class="section-label">گفتگوها</div>`;
   html += chats.map(chatItemHTML).join('');
-  if (q && !chats.length && !state.searchUsers.length && !state.searchMessages.length) {
+  if (q && !chats.length && !state.searchChannels.length && !state.searchUsers.length && !state.searchMessages.length) {
     html = `<div class="empty-hint">نتیجه‌ای پیدا نشد</div>`;
+  }
+
+  // نتایج جستجوی کانال‌های عمومی
+  if (q && state.searchChannels && state.searchChannels.length) {
+    html += `<div class="section-label">کانال‌ها (${faNum(state.searchChannels.length)})</div>`;
+    html += state.searchChannels
+      .map(
+        (c) => `
+      <div class="chat-item search-channel-item" data-channel-id="${c.id}" data-username="${esc(c.username || '')}">
+        ${avatarHTML({ id: c.id, title: c.title, avatar_url: c.avatar_url, icon: ICONS.channel })}
+        <div class="ci-main">
+          <div class="ci-row">
+            <span class="ci-name">${esc(c.title)}${c.is_official ? verifiedBadgeHTML() : ''}</span>
+            <span class="ci-time">${faNum(c.member_count)} عضو</span>
+          </div>
+          <div class="ci-row">
+            <span class="ci-preview">${c.username ? `@${esc(c.username)}` : 'کانال عمومی'}</span>
+          </div>
+        </div>
+      </div>`
+      )
+      .join('');
   }
 
   // نتایج جستجوی کاربران
@@ -145,8 +173,8 @@ function chatItemHTML(c) {
   const pin = c.pinned ? `<span class="pin-flag" title="سنجاق‌شده" style="display:inline-flex;width:14px;height:14px;vertical-align:middle;margin-inline-end:3px;">${ICONS.pin}</span>` : '';
   const muteIcon = c.is_muted ? `<span class="mute-flag" title="بی‌صدا">${ICONS.mute}</span>` : '';
 
-  const isSafir = c.peer && (c.peer.username === 'safir' || c.peer.is_safir);
-  const vBadge = isSafir ? verifiedBadgeHTML() : '';
+  const isVerified = (c.peer && (c.peer.username === 'safir' || c.peer.is_safir)) || c.is_official || c.is_verified;
+  const vBadge = isVerified ? verifiedBadgeHTML() : '';
 
   return `
   <div class="chat-item${c.id === state.activeChatId ? ' active' : ''}${c.unread_count > 0 ? ' unread' : ''}" data-id="${c.id}">
@@ -333,6 +361,17 @@ function bindSidebar() {
       startPrivateChat(Number(userItem.dataset.user));
       return;
     }
+    const searchChannelItem = e.target.closest('.search-channel-item');
+    if (searchChannelItem) {
+      const channelId = Number(searchChannelItem.dataset.channelId);
+      const username = searchChannelItem.dataset.username;
+      if (state.chats.has(channelId)) {
+        openChat(channelId);
+      } else {
+        openJoinModal(username ? `@${username}` : '');
+      }
+      return;
+    }
     const item = e.target.closest('.chat-item');
     if (item) openChat(Number(item.dataset.id));
   });
@@ -363,17 +402,20 @@ function bindSidebar() {
       const q = state.searchQ.trim();
       if (!q) {
         state.searchUsers = [];
+        state.searchChannels = [];
         state.searchMessages = [];
         renderSidebar();
         return;
       }
       try {
-        const [uRes, mRes] = await Promise.all([
+        const [uRes, cRes, mRes] = await Promise.all([
           api('/search/users?q=' + encodeURIComponent(q)).catch(() => ({ users: [] })),
+          api('/search/channels?q=' + encodeURIComponent(q)).catch(() => ({ channels: [] })),
           api('/search/messages?q=' + encodeURIComponent(q)).catch(() => ({ messages: [] })),
         ]);
         if (state.searchQ.trim() === q) {
           state.searchUsers = uRes.users || [];
+          state.searchChannels = cRes.channels || [];
           state.searchMessages = mRes.messages || [];
           renderSidebar();
         }
@@ -454,6 +496,7 @@ async function startPrivateChat(userId) {
     }
     state.searchQ = '';
     state.searchUsers = [];
+    state.searchChannels = [];
     state.searchMessages = [];
     const searchInput = $('#search-input');
     if (searchInput) searchInput.value = '';
@@ -509,6 +552,7 @@ async function openChat(id) {
       input.value = '';
       input.style.height = 'auto';
     }
+    updateComposerButtons();
   }
 
   const msgsEl = $('#messages');
@@ -557,8 +601,8 @@ function renderChatHeader(chat) {
     title = chat.title;
     av = avatarHTML({ id: chat.id, title: chat.title, avatar_url: chat.avatar_url, icon: chat.type === 'group' ? ICONS.group : ICONS.channel });
   }
-  const isSafir = chat.peer && (chat.peer.username === 'safir' || chat.peer.is_safir);
-  const vBadge = isSafir ? verifiedBadgeHTML() : '';
+  const isVerified = (chat.peer && (chat.peer.username === 'safir' || chat.peer.is_safir)) || chat.is_official || chat.is_verified;
+  const vBadge = isVerified ? verifiedBadgeHTML() : '';
   el.innerHTML = `${av}<div class="cht"><div class="t">${esc(title)}${vBadge}</div><div class="s" id="header-sub"></div></div>`;
   renderChatHeaderSub(chat);
 }
@@ -575,6 +619,10 @@ function renderChatHeaderSub(chat) {
     } else {
       sub = chat.peer && (state.online.has(chat.peer.id) ? 'آنلاین' : relLastSeen(chat.peer.last_seen_at));
     }
+  } else if (chat.is_official) {
+    sub = `کانال رسمی قاسم‌گرام • ${faNum(chat.member_count)} دنبال‌کننده${chat.username ? ` (@${chat.username})` : ''}`;
+  } else if (chat.type === 'channel') {
+    sub = `${faNum(chat.member_count)} دنبال‌کننده${chat.username ? ` • @${chat.username}` : ''}`;
   } else {
     sub = `${faNum(chat.member_count)} عضو`;
   }
@@ -695,9 +743,23 @@ function updateComposerForChat(chat) {
     updateApprovalState();
     return;
   }
-  const canPost = canPostIn(chat);
+  const canPost = canPostIn(chat) && chat.can_send !== false;
   $('#composer')?.classList.toggle('hidden', !canPost);
-  $('#channel-notice')?.classList.toggle('hidden', canPost);
+  const noticeEl = $('#channel-notice');
+  if (noticeEl) {
+    noticeEl.classList.toggle('hidden', canPost);
+    if (!canPost) {
+      if (chat.type === 'private' && chat.can_send === false) {
+        noticeEl.textContent = 'ارسال پیام در این گفتگو غیرفعال است (عدم تطابق دسته‌بندی با کاربر مقابل)';
+      } else if (chat.type === 'channel') {
+        noticeEl.textContent = 'فقط مدیران می‌توانند در کانال پیام ارسال کنند';
+      } else if (chat.can_send === false) {
+        noticeEl.textContent = 'ارسال پیام برای این گفتگو برای دسته‌بندی شما غیرفعال است';
+      } else {
+        noticeEl.textContent = 'امکان ارسال پیام وجود ندارد';
+      }
+    }
+  }
   clearPendingFile();
   if (canPost) $('#msg-input')?.focus();
 }
@@ -832,7 +894,9 @@ function renderInfoPane(data) {
     : avatarHTML({ id: data.id, title: data.title, avatar_url: data.avatar_url, icon: chatIcon });
   const sub = isPrivate
     ? `@${esc(data.peer?.username || '')}<br>${state.online.has(data.peer?.id) ? 'آنلاین' : esc(relLastSeen(data.peer?.last_seen_at))}`
-    : `${faNum(data.member_count)} عضو · ${data.type === 'group' ? 'گروه' : 'کانال'}`;
+    : data.type === 'channel'
+      ? `${data.username ? `@${esc(data.username)}<br>` : ''}${faNum(data.member_count)} دنبال‌کننده · کانال`
+      : `${faNum(data.member_count)} عضو · گروه`;
   $('#info-hero').innerHTML = `${heroAv}<div class="ih-title">${esc(isPrivate ? data.peer?.display_name || '' : data.title)}</div><div class="ih-sub">${sub}</div>`;
   const heroAvatar = $('#info-hero .avatar');
   const avUrl = isPrivate ? data.peer?.avatar_url : data.avatar_url;
@@ -866,56 +930,96 @@ function renderInfoPane(data) {
     }
   }
 
-  // لینک دعوت
+  // لینک دعوت و شناسه کانال
   const inviteBox = $('#info-invite-box');
   if (inviteBox) {
-    if (!isPrivate) {
-      const link = `${window.location.origin}#join/${data.invite_code || ''}`;
-      const canRevoke = ['owner', 'admin'].includes(data.role);
-      inviteBox.innerHTML = `
-        <div class="invite-card">
-          <div class="invite-card-head">
-            <span style="display:flex;align-items:center;gap:6px;">${ICONS.link} لینک دعوت</span>
-          </div>
-          <div class="invite-link-row">
-            <span class="invite-link-text">${esc(link)}</span>
-          </div>
-          <div class="invite-actions">
-            <button type="button" id="copy-invite-btn">${ICONS.copy} کپی لینک</button>
-            ${canRevoke ? `<button type="button" class="danger" id="revoke-invite-btn">${ICONS.refresh} لینک جدید</button>` : ''}
-          </div>
-        </div>`;
-      inviteBox.classList.remove('hidden');
+    const isChannel = data.type === 'channel';
+    const isMod = ['owner', 'admin'].includes(data.role);
 
-      const copyBtn = $('#copy-invite-btn');
-      if (copyBtn) {
-        copyBtn.onclick = async () => {
-          try {
-            await navigator.clipboard.writeText(link);
-            showToast('لینک دعوت کپی شد ✅');
-          } catch {
-            showToast('کپی ممکن نشد');
+    if (!isPrivate) {
+      if (isChannel && !isMod) {
+        // کاربران عادی کانال فقط شناسه عمومی را برای اشتراک‌گذاری می‌بینند و لینک دعوت خصوصی مخفی است
+        if (data.username) {
+          const publicLink = `${window.location.origin}#join/@${data.username}`;
+          inviteBox.innerHTML = `
+            <div class="invite-card">
+              <div class="invite-card-head">
+                <span style="display:flex;align-items:center;gap:6px;">${ICONS.link} شناسه عمومی کانال</span>
+              </div>
+              <div class="invite-link-row">
+                <span class="invite-link-text">@${esc(data.username)}</span>
+              </div>
+              <div class="invite-actions">
+                <button type="button" id="copy-public-link-btn">${ICONS.copy} کپی آدرس عمومی</button>
+              </div>
+            </div>`;
+          inviteBox.classList.remove('hidden');
+          const copyPubBtn = $('#copy-public-link-btn');
+          if (copyPubBtn) {
+            copyPubBtn.onclick = async () => {
+              try {
+                await navigator.clipboard.writeText(publicLink);
+                showToast('آدرس عمومی کانال کپی شد ✅');
+              } catch {
+                showToast('کپی ممکن نشد');
+              }
+            };
           }
-        };
-      }
-      const revokeBtn = $('#revoke-invite-btn');
-      if (revokeBtn) {
-        revokeBtn.onclick = async () => {
-          const ok = await askConfirm({
-            title: 'لغو و ساخت لینک جدید',
-            text: 'آیا از باطل کردن لینک فعلی و تولید لینک جدید مطمئن هستید؟ لینک قبلی دیگر معتبر نخواهد بود.',
-            ok: 'تولید لینک جدید',
-          });
-          if (!ok) return;
-          try {
-            const r = await api(`/chats/${data.id}/invite-link/revoke`, { method: 'POST' });
-            data.invite_code = r.invite_code;
-            showToast('لینک جدید تولید شد ✅');
-            await refreshInfoPane();
-          } catch (e) {
-            showToast(e.message);
-          }
-        };
+        } else {
+          inviteBox.innerHTML = '';
+          inviteBox.classList.add('hidden');
+        }
+      } else if (data.invite_code) {
+        const link = `${window.location.origin}#join/${data.invite_code || ''}`;
+        const canRevoke = isMod;
+        inviteBox.innerHTML = `
+          <div class="invite-card">
+            <div class="invite-card-head">
+              <span style="display:flex;align-items:center;gap:6px;">${ICONS.link} ${isChannel ? 'لینک دعوت خصوصی کانال' : 'لینک دعوت'}</span>
+            </div>
+            <div class="invite-link-row">
+              <span class="invite-link-text">${esc(link)}</span>
+            </div>
+            <div class="invite-actions">
+              <button type="button" id="copy-invite-btn">${ICONS.copy} کپی لینک</button>
+              ${canRevoke ? `<button type="button" class="danger" id="revoke-invite-btn">${ICONS.refresh} لینک جدید</button>` : ''}
+            </div>
+          </div>`;
+        inviteBox.classList.remove('hidden');
+
+        const copyBtn = $('#copy-invite-btn');
+        if (copyBtn) {
+          copyBtn.onclick = async () => {
+            try {
+              await navigator.clipboard.writeText(link);
+              showToast('لینک دعوت کپی شد ✅');
+            } catch {
+              showToast('کپی ممکن نشد');
+            }
+          };
+        }
+        const revokeBtn = $('#revoke-invite-btn');
+        if (revokeBtn) {
+          revokeBtn.onclick = async () => {
+            const ok = await askConfirm({
+              title: 'لغو و ساخت لینک جدید',
+              text: 'آیا از باطل کردن لینک فعلی و تولید لینک جدید مطمئن هستید؟ لینک قبلی دیگر معتبر نخواهد بود.',
+              ok: 'تولید لینک جدید',
+            });
+            if (!ok) return;
+            try {
+              const r = await api(`/chats/${data.id}/invite-link/revoke`, { method: 'POST' });
+              data.invite_code = r.invite_code;
+              showToast('لینک جدید تولید شد ✅');
+              await refreshInfoPane();
+            } catch (e) {
+              showToast(e.message);
+            }
+          };
+        }
+      } else {
+        inviteBox.innerHTML = '';
+        inviteBox.classList.add('hidden');
       }
     } else {
       inviteBox.innerHTML = '';
@@ -923,11 +1027,14 @@ function renderInfoPane(data) {
     }
   }
 
-  // اعضا
+  // اعضا (برای کاربران عادی کانال به طور کامل مخفی است)
   const membersBox = $('#info-members-box');
   if (membersBox) {
-    if (!isPrivate) {
-      $('#info-members-label').textContent = `اعضا (${faNum(data.member_count)})`;
+    const isChannel = data.type === 'channel';
+    const isMod = ['owner', 'admin'].includes(data.role);
+
+    if (!isPrivate && (!isChannel || isMod)) {
+      $('#info-members-label').textContent = `${isChannel ? 'مشترکین و مدیران' : 'اعضا'} (${faNum(data.member_count)})`;
       const meRole = data.role;
       $('#info-members').innerHTML = (data.members || [])
         .map((u) => {
