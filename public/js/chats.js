@@ -608,6 +608,16 @@ function renderChatHeader(chat) {
   const vBadge = isVerified ? verifiedBadgeHTML() : '';
   el.innerHTML = `${av}<div class="cht"><div class="t">${esc(title)}${vBadge}</div><div class="s" id="header-sub"></div></div>`;
   renderChatHeaderSub(chat);
+
+  const callBtn = $('#chat-call-btn');
+  if (callBtn) {
+    const canCall = chat.type === 'private' && !chat.is_saved && chat.peer && chat.peer.username !== 'safir' && !chat.peer.is_safir;
+    if (canCall) {
+      callBtn.classList.remove('hidden');
+    } else {
+      callBtn.classList.add('hidden');
+    }
+  }
 }
 
 function renderChatHeaderSub(chat) {
@@ -770,6 +780,7 @@ function updateComposerForChat(chat) {
 function closeChatView() {
   typingPing(true);
   closeChatSearch();
+  $('#chat-call-btn')?.classList.add('hidden');
   state.activeChatId = null;
   state.activeTopicId = null;
   localStorage.removeItem('gg_active_chat');

@@ -951,7 +951,12 @@
 
       <!-- لیست دسته‌بندی‌های فعال -->
       <div class="admin-card" style="margin-bottom: 24px;">
-        <h3>🗂 دسته‌بندی‌های فعال سامانه</h3>
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
+          <h3 style="margin-bottom: 0; border-bottom: none; padding-bottom: 0;">🗂 دسته‌بندی‌های فعال سامانه</h3>
+          <button type="button" class="btn btn-outline btn-sm" id="btn-sync-category-chats" style="color: #64b5f6; border-color: rgba(36, 129, 204, 0.4);">
+            🔄 همگام‌سازی چت‌های اعضای دسته‌بندی‌ها
+          </button>
+        </div>
         <div id="categories-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; margin-top: 14px;"></div>
       </div>
 
@@ -1706,6 +1711,16 @@
         $('#new-cat-name').value = '';
         $('#new-cat-desc').value = '';
         showToast(res.message || 'دسته‌بندی ایجاد شد ✅');
+        await loadCategories();
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+
+    $('#btn-sync-category-chats')?.addEventListener('click', async () => {
+      try {
+        const res = await req('/admin/categories/sync-chats', { method: 'POST' });
+        showToast(res.message || 'چت‌های اعضای دسته‌بندی‌ها همگام‌سازی شدند ✅');
         await loadCategories();
       } catch (err) {
         showToast(err.message);

@@ -1967,3 +1967,551 @@ html[dir="ltr"] .settings-drawer-content {
   cursor: not-allowed;
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   سیستم تماس صوتی P2P تلگرامی (WebRTC Voice Call Styling)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── لایه تمام‌صفحه تماس فعال ── */
+.call-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  background: radial-gradient(circle at 50% 30%, rgba(26, 38, 57, 0.96), rgba(10, 15, 23, 0.98));
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: #ffffff;
+  animation: callFadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+  user-select: none;
+}
+
+@keyframes callFadeIn {
+  from { opacity: 0; transform: scale(1.03); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.call-screen {
+  width: 100%;
+  max-width: 440px;
+  height: 100%;
+  max-height: 840px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  padding: 36px 24px 44px;
+  box-sizing: border-box;
+  position: relative;
+}
+
+/* ── هدر تماس ── */
+.call-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.call-header-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+.call-header-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
+  transform: scale(1.06);
+}
+.call-header-btn svg {
+  width: 24px;
+  height: 24px;
+  fill: currentColor;
+}
+
+.call-encryption-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 500;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.call-encryption-badge svg {
+  width: 14px;
+  height: 14px;
+  fill: #34d399;
+}
+
+/* ── بدنه تماس و آواتار ── */
+.call-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  margin-top: -20px;
+}
+
+.call-avatar-container {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.call-avatar {
+  width: 130px;
+  height: 130px;
+  border-radius: 50%;
+  position: relative;
+  z-index: 2;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.55);
+  border: 3px solid rgba(255, 255, 255, 0.2);
+  overflow: hidden;
+  background: #2a3744;
+}
+.call-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.call-avatar .avatar-text {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 48px;
+  font-weight: 700;
+  color: #fff;
+}
+
+/* موج‌های تپنده دور آواتار */
+.call-ripple {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid rgba(52, 211, 153, 0.4);
+  pointer-events: none;
+  z-index: 1;
+}
+.call-ripple.ring-1 {
+  width: 150px;
+  height: 150px;
+  animation: callRippleAnim 2.2s infinite ease-out;
+}
+.call-ripple.ring-2 {
+  width: 150px;
+  height: 150px;
+  animation: callRippleAnim 2.2s infinite ease-out 0.9s;
+}
+
+@keyframes callRippleAnim {
+  0% { width: 130px; height: 130px; opacity: 0.8; transform: translate(-50%, -50%) scale(1); }
+  100% { width: 230px; height: 230px; opacity: 0; transform: translate(-50%, -50%) scale(1.15); }
+}
+
+.call-user-name {
+  font-size: 23px;
+  font-weight: 700;
+  margin: 0 0 8px;
+  color: #ffffff;
+  letter-spacing: -0.3px;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+.call-status {
+  font-size: 14.5px;
+  color: rgba(255, 255, 255, 0.7);
+  margin-bottom: 6px;
+  min-height: 22px;
+}
+
+.call-timer {
+  font-size: 18px;
+  font-weight: 600;
+  color: #34d399;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 1px;
+}
+
+/* ── دکمه‌های کنترل تماس ── */
+.call-controls {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  padding: 0 10px;
+}
+
+.call-ctrl-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+.call-ctrl-btn:hover {
+  color: #ffffff;
+}
+
+.ctrl-icon-wrap {
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+.call-ctrl-btn:hover .ctrl-icon-wrap {
+  background: rgba(255, 255, 255, 0.25);
+  transform: translateY(-2px) scale(1.05);
+}
+.call-ctrl-btn:active .ctrl-icon-wrap {
+  transform: scale(0.95);
+}
+
+.ctrl-icon-wrap svg {
+  width: 27px;
+  height: 27px;
+  fill: #ffffff;
+}
+
+/* دکمه میوت و اسپیکر فعال */
+.call-ctrl-btn.active .ctrl-icon-wrap {
+  background: #ffffff;
+  color: #111827;
+}
+.call-ctrl-btn.active .ctrl-icon-wrap svg {
+  fill: #111827;
+}
+
+/* دکمه قرمز قطع تماس */
+.call-ctrl-btn.ctrl-end .ctrl-icon-wrap {
+  background: #ef4444;
+  box-shadow: 0 8px 24px rgba(239, 68, 68, 0.45);
+}
+.call-ctrl-btn.ctrl-end:hover .ctrl-icon-wrap {
+  background: #dc2626;
+  transform: translateY(-2px) scale(1.08);
+}
+
+/* ── مودال تماس ورودی (Incoming Call Card) ── */
+.incoming-call-card {
+  background: var(--bg-card, #1e2633);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+  border-radius: 24px;
+  width: 90%;
+  max-width: 360px;
+  padding: 32px 24px 28px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  animation: incomingPopIn 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+@keyframes incomingPopIn {
+  from { opacity: 0; transform: scale(0.85) translateY(20px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.ic-avatar-wrap {
+  position: relative;
+  width: 104px;
+  height: 104px;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ic-avatar {
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  position: relative;
+  z-index: 2;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  border: 3px solid rgba(255, 255, 255, 0.2);
+  overflow: hidden;
+  background: #2a3744;
+}
+.ic-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.ic-avatar .avatar-text {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 36px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.ic-pulse-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  border: 2px solid #2ec971;
+  animation: icRingPulse 1.8s infinite ease-out;
+  pointer-events: none;
+}
+.ic-pulse-ring.delay {
+  animation-delay: 0.7s;
+}
+
+@keyframes icRingPulse {
+  0% { width: 92px; height: 92px; opacity: 0.9; }
+  100% { width: 160px; height: 160px; opacity: 0; }
+}
+
+.ic-info h3 {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--text-primary, #ffffff);
+  margin: 0 0 6px;
+}
+.ic-info p {
+  font-size: 13.5px;
+  color: var(--text-secondary, #94a3b8);
+  margin: 0 0 26px;
+}
+
+.ic-actions {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  gap: 16px;
+}
+
+.call-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #ffffff);
+  transition: transform 0.2s ease;
+}
+.call-btn:hover {
+  transform: scale(1.06);
+}
+.call-btn:active {
+  transform: scale(0.96);
+}
+
+.call-btn svg {
+  width: 28px;
+  height: 28px;
+  fill: #ffffff;
+}
+
+.btn-call-hangup svg {
+  width: 58px;
+  height: 58px;
+  padding: 15px;
+  box-sizing: border-box;
+  background: #ef4444;
+  border-radius: 50%;
+  box-shadow: 0 8px 20px rgba(239, 68, 68, 0.45);
+}
+
+.btn-call-answer svg {
+  width: 58px;
+  height: 58px;
+  padding: 15px;
+  box-sizing: border-box;
+  background: #2ec971;
+  border-radius: 50%;
+  box-shadow: 0 8px 20px rgba(46, 201, 113, 0.45);
+}
+
+/* ── نوار شناور تماس (Floating Call Pill) ── */
+.floating-call-pill {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9990;
+  background: rgba(22, 30, 42, 0.94);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 36px;
+  padding: 6px 14px 6px 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  animation: pillSlideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  color: #fff;
+  cursor: default;
+}
+
+@keyframes pillSlideDown {
+  from { opacity: 0; transform: translate(-50%, -24px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.fcp-avatar-wrap {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.fcp-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: #2a3744;
+  position: relative;
+  z-index: 2;
+}
+.fcp-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.fcp-avatar .avatar-text {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.fcp-pulse {
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 2px solid #34d399;
+  animation: fcpPulseAnim 1.6s infinite ease-out;
+  pointer-events: none;
+}
+@keyframes fcpPulseAnim {
+  0% { transform: scale(0.9); opacity: 0.9; }
+  100% { transform: scale(1.4); opacity: 0; }
+}
+
+.fcp-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 80px;
+}
+.fcp-name {
+  font-size: 13px;
+  font-weight: 600;
+  max-width: 110px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #ffffff;
+}
+.fcp-timer {
+  font-size: 11.5px;
+  color: #34d399;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.fcp-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fcp-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.18s ease;
+}
+.fcp-btn:hover {
+  background: rgba(255, 255, 255, 0.24);
+  transform: scale(1.08);
+}
+.fcp-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+.fcp-btn.fcp-danger {
+  background: #ef4444;
+}
+.fcp-btn.fcp-danger:hover {
+  background: #dc2626;
+}
+
+/* ── استایل دکمه تماس در هدر چت ── */
+#chat-call-btn {
+  color: var(--accent, #2aabee);
+  transition: transform 0.18s ease, color 0.18s ease;
+}
+#chat-call-btn:hover {
+  color: #2ec971;
+  transform: scale(1.1);
+}
+#chat-call-btn svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+}
+
+

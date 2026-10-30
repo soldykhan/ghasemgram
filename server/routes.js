@@ -261,6 +261,9 @@ module.exports = function createApi(db, sock) {
     for (const m of members) sock.emitToUser(m.user_id, 'message', payload);
     return payload;
   }
+  if (sock && typeof sock.setPostServiceMessage === 'function') {
+    sock.setPostServiceMessage(postServiceMessage);
+  }
 
   function ensureInviteCode(chatId) {
     let row = db.prepare('SELECT invite_code FROM chats WHERE id = ?').get(chatId);
@@ -485,6 +488,99 @@ module.exports = function createApi(db, sock) {
     } catch {}
     db.prepare('DELETE FROM files WHERE id = ?').run(fid);
   }
+
+  // ایجاد و همگام‌سازی چت‌های خصوصی بین تمام اعضای یک دسته‌بندی
+  function ensureCategoryPrivateChats(userId, categoryId) {
+    if (!userId || !categoryId) return;
+    const catMembers = db.prepare(`
+      SELECT id FROM users
+      WHERE category_id = ? AND status = 'approved' AND id != ? AND username != 'safir'
+    `).all(categoryId, userId);
+
+    if (!catMembers.length) return;
+
+    const now = Date.now();
+    const createdOrUpdatedChats = [];
+
+    db.exec('BEGIN TRANSACTION');
+    try {
+      for (const other of catMembers) {
+        const otherId = Number(other.id);
+        const existing = db.prepare(`
+          SELECT c.id FROM chats c
+          JOIN chat_members a ON a.chat_id = c.id AND a.user_id = ?
+          JOIN chat_members b ON b.chat_id = c.id AND b.user_id = ?
+          WHERE c.type = 'private' AND c.is_saved = 0
+            AND (SELECT COUNT(*) FROM chat_members m WHERE m.chat_id = c.id) = 2
+        `).get(userId, otherId);
+
+        let chatId;
+        if (!existing) {
+          const info = db.prepare(
+            "INSERT INTO chats (type, title, category_id, created_by, created_at) VALUES ('private', NULL, ?, ?, ?)"
+          ).run(categoryId, userId, now);
+          chatId = Number(info.lastInsertRowid);
+          db.prepare("INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)").run(chatId, userId, now);
+          db.prepare("INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)").run(chatId, otherId, now);
+        } else {
+          chatId = Number(existing.id);
+          db.prepare("UPDATE chats SET category_id = ? WHERE id = ?").run(categoryId, chatId);
+        }
+        createdOrUpdatedChats.push({ chatId, otherId });
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      try { db.exec('ROLLBACK'); } catch {}
+      console.error('[DB] Failed to ensure category private chats:', e);
+      return;
+    }
+
+    // انتشار رویدادهای زنده سوکت به کاربران آنلاین
+    for (const { chatId, otherId } of createdOrUpdatedChats) {
+      const chatItemUser = chatListItem(chatId, userId);
+      if (chatItemUser) sock.emitToUser(userId, 'chat', chatItemUser);
+      const chatItemOther = chatListItem(chatId, otherId);
+      if (chatItemOther) sock.emitToUser(otherId, 'chat', chatItemOther);
+    }
+  }
+
+  // همگام‌سازی کامل چت‌های اعضای تمامی دسته‌بندی‌ها
+  function syncAllCategoryPrivateChats() {
+    try {
+      const cats = db.prepare('SELECT id FROM categories').all();
+      db.exec('BEGIN TRANSACTION');
+      for (const c of cats) {
+        const members = db.prepare("SELECT id FROM users WHERE category_id = ? AND status = 'approved' AND username != 'safir'").all(c.id);
+        for (let i = 0; i < members.length; i++) {
+          for (let j = i + 1; j < members.length; j++) {
+            const u1 = Number(members[i].id);
+            const u2 = Number(members[j].id);
+            const existing = db.prepare(`
+              SELECT c.id FROM chats c
+              JOIN chat_members a ON a.chat_id = c.id AND a.user_id = ?
+              JOIN chat_members b ON b.chat_id = c.id AND b.user_id = ?
+              WHERE c.type = 'private' AND c.is_saved = 0
+                AND (SELECT COUNT(*) FROM chat_members m WHERE m.chat_id = c.id) = 2
+            `).get(u1, u2);
+            if (!existing) {
+              const now = Date.now();
+              const info = db.prepare(
+                "INSERT INTO chats (type, title, category_id, created_by, created_at) VALUES ('private', NULL, ?, ?, ?)"
+              ).run(c.id, u1, now);
+              const chatId = Number(info.lastInsertRowid);
+              db.prepare("INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)").run(chatId, u1, now);
+              db.prepare("INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)").run(chatId, u2, now);
+            }
+          }
+        }
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      try { db.exec('ROLLBACK'); } catch {}
+      console.error('[DB] Failed to sync all category private chats:', e);
+    }
+  }
+  syncAllCategoryPrivateChats();
 
   /* ---------------- احراز هویت ---------------- */
 
@@ -2484,6 +2580,9 @@ module.exports = function createApi(db, sock) {
     // ارسال رویداد زنده به سوکت کاربر برای فعال‌سازی آنی تمام امکانات
     sock.emitToUser(targetId, 'user-status-changed', { status: 'approved', category_id: categoryId });
 
+    // ایجاد چت خصوصی با تمامی اعضای این دسته‌بندی تا در لیست چت‌ها ظاهر شوند
+    ensureCategoryPrivateChats(targetId, categoryId);
+
     res.json({ ok: true, message: `کاربر با موفقیت در دسته‌بندی «${cat.name}» تایید شد.` });
   }));
 
@@ -2564,10 +2663,18 @@ module.exports = function createApi(db, sock) {
       if (itemPeer) sock.emitToUser(pc.peer_id, 'chat', itemPeer);
     }
 
+    // ایجاد و اتصال چت‌های خصوصی اعضای دسته‌بندی جدید
+    ensureCategoryPrivateChats(targetId, newCatId);
+
     res.json({ ok: true, message: `دسته‌بندی کاربر به «${cat.name}» تغییر یافت و دسترسی‌ها به‌روز شدند.` });
   }));
 
   /* ---------------- API های دسته‌بندی‌ها ---------------- */
+
+  api.post('/admin/categories/sync-chats', adminAuth, h(async (req, res) => {
+    syncAllCategoryPrivateChats();
+    res.json({ ok: true, message: 'چت‌های تمام اعضای دسته‌بندی‌ها با موفقیت همگام‌سازی شدند.' });
+  }));
 
   api.get('/admin/categories', adminAuth, h(async (req, res) => {
     const list = db.prepare(`

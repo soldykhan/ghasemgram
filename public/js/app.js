@@ -126,10 +126,17 @@ function connectSocket() {
   if (state.socket) {
     state.socket.io.opts.auth = { token: state.token };
     state.socket.connect();
+    if (typeof window.initCallSignaling === 'function') {
+      window.initCallSignaling(state.socket);
+    }
     return;
   }
   const socket = io({ auth: { token: state.token } });
   state.socket = socket;
+
+  if (typeof window.initCallSignaling === 'function') {
+    window.initCallSignaling(socket);
+  }
 
   socket.on('message', onIncomingMessage);
 
