@@ -4,7 +4,8 @@
   "description": "پیام‌رسان قاسم‌گرام — رابط کاربری شبیه تلگرام",
   "main": "server/index.js",
   "scripts": {
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "test": "node test/test.js"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

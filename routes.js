@@ -1,0 +1,3288 @@
+'use strict';
+
+const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const multer = require('multer');
+
+const {
+  UPLOAD_DIR,
+  ensureSafirBot,
+  ensureOfficialChannel,
+  ensureDefaultCategory,
+  getUserCategoryIds,
+  getUserCategories,
+  setUserCategories,
+} = require('./db');
+const {
+  USERNAME_RE,
+  hashPassword,
+  verifyPassword,
+  newToken,
+  fixFileName,
+  generateRecoveryKey,
+  formatRemainingBanTime,
+  parseDevice,
+} = require('./util');
+const { getVapidPublicKey, notifyNewMessage, sendPushToUser } = require('./push');
+
+const MAX_FILE_SIZE = 200 * 1024 * 1024; // ۲۰۰ مگابایت
+
+const storage = multer.diskStorage({
+  destination: UPLOAD_DIR,
+  filename: (req, file, cb) => cb(null, crypto.randomBytes(16).toString('hex')),
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: MAX_FILE_SIZE, files: 1 },
+});
+
+class ApiError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+const err = (status, message) => new ApiError(status, message);
+
+// پوشش توابع async برای هدایت خطا به middleware خطا
+const h = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
+
+module.exports = function createApi(db, sock) {
+  const api = express.Router();
+
+  /* ---------------- ابزارهای مشترک ---------------- */
+
+  const fileUrl = (id) => (id ? `/api/files/${id}` : null);
+
+  function userPublic(u, viewerId = 0) {
+    if (!u) return null;
+    let lastSeen = u.last_seen_at;
+    if (u.privacy_last_seen === 'nobody' && viewerId && Number(u.id) !== Number(viewerId)) {
+      lastSeen = null;
+    }
+    const catIds = getUserCategoryIds(u.id);
+    const cats = getUserCategories(u.id);
+    return {
+      id: Number(u.id),
+      username: u.username,
+      display_name: u.display_name,
+      avatar_url: fileUrl(u.avatar_file_id),
+      bio: u.bio || '',
+      privacy_last_seen: u.privacy_last_seen || 'everyone',
+      status: u.status || 'approved',
+      category_id: catIds.length > 0 ? catIds[0] : (u.category_id ? Number(u.category_id) : null),
+      category_ids: catIds,
+      category_name: cats.length > 0 ? cats.map((c) => c.name).join('، ') : null,
+      categories: cats,
+      is_special: !!u.is_special,
+      banned_until: u.banned_until ? Number(u.banned_until) : null,
+      is_safir: u.username === 'safir',
+      last_seen_at: lastSeen,
+    };
+  }
+
+  const getUserById = (id) => db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+
+  function canUserSendMessage(user, chat, peer = null) {
+    if (!user || user.status === 'pending') return false;
+    if (!chat) return false;
+
+    if (chat.is_saved) return true;
+
+    if (chat.is_official) {
+      const member = getMembership(chat.id, user.id);
+      return isModerator(member);
+    }
+
+    if (chat.type === 'channel') {
+      const member = getMembership(chat.id, user.id);
+      if (!isModerator(member)) return false;
+      if (user.is_special) return true;
+      const catId = chat.category_id || (getUserById(chat.created_by)?.category_id);
+      if (catId) {
+        const uCats = getUserCategoryIds(user.id);
+        if (!uCats.includes(Number(catId))) return false;
+      }
+      return true;
+    }
+
+    if (chat.type === 'private') {
+      if (!peer) {
+        const peerRow = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ? AND user_id != ?').get(chat.id, user.id);
+        peer = peerRow ? getUserById(peerRow.user_id) : null;
+      }
+      if (!peer) return false;
+      if (peer.username === 'safir') return true;
+      if (user.is_special || peer.is_special) return true;
+      const uCats = getUserCategoryIds(user.id);
+      const peerCats = getUserCategoryIds(peer.id);
+      if (uCats.some((cid) => peerCats.includes(cid))) {
+        return true;
+      }
+      return false;
+    }
+
+    if (chat.type === 'group') {
+      if (user.is_special) return true;
+      const catId = chat.category_id || (getUserById(chat.created_by)?.category_id);
+      if (catId) {
+        const uCats = getUserCategoryIds(user.id);
+        if (!uCats.includes(Number(catId))) return false;
+      }
+      return true;
+    }
+
+    return true;
+  }
+
+  function isBlockedBetween(u1, u2) {
+    if (!u1 || !u2) return false;
+    const row = db
+      .prepare('SELECT 1 FROM blocked_users WHERE (user_id = ? AND blocked_id = ?) OR (user_id = ? AND blocked_id = ?)')
+      .get(u1, u2, u2, u1);
+    return !!row;
+  }
+
+  async function fetchLinkPreview(text) {
+    if (!text) return null;
+    const match = text.match(/https?:\/\/[^\s<>"']+/i);
+    if (!match) return null;
+    const url = match[0];
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2000);
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      });
+      clearTimeout(timeout);
+      if (!res.ok) return null;
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.includes('text/html')) return null;
+
+      const html = (await res.text()).slice(0, 50000);
+      const getMeta = (prop) => {
+        const re = new RegExp(`<meta[^>]+(?:property|name)=["'](?:og:)?${prop}["'][^>]+content=["']([^"']+)["']`, 'i');
+        const m = html.match(re);
+        return m ? m[1] : null;
+      };
+      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+      const title = getMeta('title') || (titleMatch ? titleMatch[1].trim() : null);
+      const description = getMeta('description');
+      const image = getMeta('image');
+      let site_name = getMeta('site_name');
+      if (!site_name) {
+        try { site_name = new URL(url).hostname; } catch {}
+      }
+      if (!title && !description) return null;
+      return { url, title: (title || '').slice(0, 150), description: (description || '').slice(0, 300), image, site_name };
+    } catch {
+      return null;
+    }
+  }
+
+  function getPollData(msgId, viewerId = 0) {
+    if (!msgId) return null;
+    const poll = db.prepare('SELECT * FROM polls WHERE message_id = ?').get(msgId);
+    if (!poll) return null;
+    const options = db.prepare('SELECT * FROM poll_options WHERE poll_id = ? ORDER BY position, id').all(poll.id);
+    const totalVotes = db.prepare('SELECT COUNT(DISTINCT user_id) AS c FROM poll_votes WHERE poll_id = ?').get(poll.id).c;
+    const myVotes = viewerId
+      ? db.prepare('SELECT option_id FROM poll_votes WHERE poll_id = ? AND user_id = ?').all(poll.id, viewerId).map((r) => r.option_id)
+      : [];
+
+    const optsWithCounts = options.map((opt) => {
+      const count = db.prepare('SELECT COUNT(*) AS c FROM poll_votes WHERE option_id = ?').get(opt.id).c;
+      const percent = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0;
+      return {
+        id: Number(opt.id),
+        text: opt.text,
+        votes: count,
+        vote_count: count,
+        percent,
+        chosen: myVotes.includes(Number(opt.id)),
+      };
+    });
+
+    return {
+      id: Number(poll.id),
+      question: poll.question,
+      is_anonymous: !!poll.is_anonymous,
+      allows_multiple: !!poll.allows_multiple,
+      is_multiple: !!poll.allows_multiple,
+      is_quiz: !!poll.is_quiz,
+      correct_option_id: poll.correct_option_id ? Number(poll.correct_option_id) : null,
+      closed: !!poll.closed,
+      total_votes: totalVotes,
+      my_votes: myVotes,
+      options: optsWithCounts,
+    };
+  }
+
+  function saveFile(file, userId) {
+    const name = fixFileName(file.originalname || 'فایل');
+    const info = db
+      .prepare('INSERT INTO files (stored_name, original_name, mime_type, size, uploaded_by, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(file.filename, name, file.mimetype || 'application/octet-stream', file.size, userId, Date.now());
+    return Number(info.lastInsertRowid);
+  }
+
+  const getMembership = (chatId, userId) =>
+    db.prepare('SELECT * FROM chat_members WHERE chat_id = ? AND user_id = ?').get(chatId, userId);
+
+  const isModerator = (member) => !!(member && ['owner', 'admin'].includes(member.role));
+
+  const chatMemberCount = (chatId) =>
+    db.prepare('SELECT COUNT(*) AS c FROM chat_members WHERE chat_id = ?').get(chatId).c;
+
+  const MESSAGE_SELECT = `
+    SELECT m.*, u.username AS sender_username, u.display_name AS sender_display_name,
+           u.avatar_file_id AS sender_avatar_file_id,
+           f.original_name AS file_name, f.mime_type AS file_mime, f.size AS file_size,
+           r.id AS reply_id, r.text AS reply_text, r.file_id AS reply_file_id,
+           ru.display_name AS reply_sender_name, rf.mime_type AS reply_file_mime,
+           c.type AS chat_type, c.title AS chat_title, c.avatar_file_id AS chat_avatar_file_id,
+           c.username AS chat_username
+    FROM messages m
+    JOIN chats c ON c.id = m.chat_id
+    JOIN users u ON u.id = m.sender_id
+    LEFT JOIN files f ON f.id = m.file_id
+    LEFT JOIN messages r ON r.id = m.reply_to_id
+    LEFT JOIN users ru ON ru.id = r.sender_id
+    LEFT JOIN files rf ON rf.id = r.file_id`;
+
+  const getMessageFull = (id) => db.prepare(`${MESSAGE_SELECT} WHERE m.id = ?`).get(id);
+
+  function getMessageReactions(msgId, viewerId) {
+    if (!msgId) return [];
+    try {
+      return db
+        .prepare(`SELECT emoji, COUNT(*) AS count, MAX(CASE WHEN user_id = ? THEN 1 ELSE 0 END) AS me
+                  FROM message_reactions WHERE message_id = ? GROUP BY emoji`)
+        .all(viewerId || 0, msgId)
+        .map((r) => ({ emoji: r.emoji, count: Number(r.count), me: !!r.me }));
+    } catch {
+      return [];
+    }
+  }
+
+  function postServiceMessage(chatId, actorId, text) {
+    const chat = db.prepare('SELECT type FROM chats WHERE id = ?').get(chatId);
+    if (chat && chat.type === 'channel') {
+      // در کانال‌ها پیام‌های سیستمی ورود/خروج و تغییرات نباید در فید کانال نمایش داده شوند
+      return null;
+    }
+    const now = Date.now();
+    const info = db
+      .prepare('INSERT INTO messages (chat_id, sender_id, text, is_service, created_at) VALUES (?, ?, ?, 1, ?)')
+      .run(chatId, actorId, text, now);
+    const msgId = Number(info.lastInsertRowid);
+    const payload = messagePayload(getMessageFull(msgId));
+    const members = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId);
+    for (const m of members) sock.emitToUser(m.user_id, 'message', payload);
+    return payload;
+  }
+  if (sock && typeof sock.setPostServiceMessage === 'function') {
+    sock.setPostServiceMessage(postServiceMessage);
+  }
+
+  function ensureInviteCode(chatId) {
+    let row = db.prepare('SELECT invite_code FROM chats WHERE id = ?').get(chatId);
+    if (row && row.invite_code) return row.invite_code;
+    const code = crypto.randomBytes(8).toString('hex');
+    db.prepare('UPDATE chats SET invite_code = ? WHERE id = ?').run(code, chatId);
+    return code;
+  }
+
+  function messagePayload(row, viewerId = 0) {
+    if (!row) return null;
+    let linkPreview = null;
+    if (row.link_preview) {
+      try { linkPreview = JSON.parse(row.link_preview); } catch {}
+    }
+
+    const isChannel = row.chat_type === 'channel';
+    let isChannelViewerModerator = false;
+    if (isChannel && viewerId) {
+      const viewerMember = getMembership(row.chat_id, viewerId);
+      isChannelViewerModerator = isModerator(viewerMember);
+    }
+
+    // در کانال‌ها برای کاربران عادی، هویت فرستنده به هویت کانال ماسک می‌شود تا نام و مشخصات ادمین فاش نشود
+    const maskSender = isChannel && !isChannelViewerModerator;
+
+    const sender = maskSender
+      ? {
+          id: 0,
+          username: row.chat_username || '',
+          display_name: row.chat_title || 'کانال',
+          avatar_url: fileUrl(row.chat_avatar_file_id),
+          is_channel: true,
+        }
+      : {
+          id: Number(row.sender_id),
+          username: row.sender_username,
+          display_name: row.sender_display_name,
+          avatar_url: fileUrl(row.sender_avatar_file_id),
+          is_channel: false,
+        };
+
+    const canEdit = (!isChannel && Number(row.sender_id) === viewerId) || (isChannel && isChannelViewerModerator);
+
+    return {
+      id: Number(row.id),
+      chat_id: Number(row.chat_id),
+      text: row.text,
+      is_service: !!row.is_service,
+      is_silent: !!row.is_silent,
+      is_voice: !!(row.is_voice || (row.file_mime && row.file_mime.startsWith('audio/'))),
+      edited_at: row.edited_at ? Number(row.edited_at) : null,
+      link_preview: linkPreview,
+      topic_id: row.topic_id ? Number(row.topic_id) : null,
+      created_at: Number(row.created_at),
+      sender,
+      can_edit: canEdit,
+      file: row.file_id
+        ? { id: Number(row.file_id), name: row.file_name, mime: row.file_mime, size: Number(row.file_size), url: fileUrl(row.file_id) }
+        : null,
+      reply_to: row.reply_id
+        ? {
+            id: Number(row.reply_id),
+            text: row.reply_text,
+            sender_name: isChannel ? (row.chat_title || 'کانال') : row.reply_sender_name,
+            mime: row.reply_file_mime,
+          }
+        : null,
+      forward: row.forward_from_id ? { from_name: row.forward_from_name } : null,
+      reactions: getMessageReactions(Number(row.id), viewerId),
+      poll: getPollData(Number(row.id), viewerId),
+    };
+  }
+
+  function chatListItem(chatId, viewerId) {
+    const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+    if (!chat) return null;
+    const member = getMembership(chatId, viewerId);
+    if (!member) return null;
+
+    const isSaved = !!chat.is_saved;
+    const isChannel = chat.type === 'channel';
+    const isMod = isModerator(member);
+
+    let peer = null;
+    let maxPeerRead = 0;
+    if (chat.type === 'private' && !isSaved) {
+      const p = db
+        .prepare(`SELECT u.*, cm.last_read_id AS peer_last_read FROM chat_members cm
+                  JOIN users u ON u.id = cm.user_id
+                  WHERE cm.chat_id = ? AND cm.user_id != ?`)
+        .get(chatId, viewerId);
+      if (p) {
+        maxPeerRead = Number(p.peer_last_read || 0);
+        const isBlockedByMe = !!db.prepare('SELECT 1 FROM blocked_users WHERE user_id = ? AND blocked_id = ?').get(viewerId, p.id);
+        const isBlockedByPeer = !!db.prepare('SELECT 1 FROM blocked_users WHERE user_id = ? AND blocked_id = ?').get(p.id, viewerId);
+        peer = {
+          ...userPublic(p, viewerId),
+          online: sock.isOnline(p.id),
+          last_seen_at: p.last_seen_at,
+          last_read_id: maxPeerRead,
+          is_blocked: isBlockedByMe,
+          is_blocked_by_peer: isBlockedByPeer,
+        };
+      }
+    } else if (!isSaved) {
+      const g = db
+        .prepare(`SELECT COALESCE(MAX(last_read_id), 0) AS max_read FROM chat_members
+                  WHERE chat_id = ? AND user_id != ?`)
+        .get(chatId, viewerId);
+      maxPeerRead = Number(g ? g.max_read : 0);
+    }
+
+    const last = db.prepare(`${MESSAGE_SELECT} WHERE m.chat_id = ? ORDER BY m.id DESC LIMIT 1`).get(chatId);
+    const unread = db
+      .prepare('SELECT COUNT(*) AS c FROM messages WHERE chat_id = ? AND id > ? AND sender_id != ?')
+      .get(chatId, member.last_read_id || 0, viewerId).c;
+
+    const isMuted = member.muted_until === -1 || (Number(member.muted_until) > 0 && Number(member.muted_until) > Date.now());
+
+    let pinnedMsg = null;
+    if (chat.pinned_message_id) {
+      const pRow = db.prepare(`${MESSAGE_SELECT} WHERE m.id = ?`).get(chat.pinned_message_id);
+      if (pRow) pinnedMsg = messagePayload(pRow, viewerId);
+    }
+
+    const viewer = getUserById(viewerId);
+    const canSend = canUserSendMessage(viewer, chat, peer);
+
+    // کاربران عادی کانال به لینک دعوت خصوصی دسترسی ندارند
+    const inviteCode = (!isSaved && chat.type !== 'private')
+      ? ((isChannel && !isMod) ? null : (chat.invite_code || ensureInviteCode(chat.id)))
+      : null;
+
+    let lastSenderName = last ? last.sender_display_name : null;
+    if (isChannel && !isMod) {
+      lastSenderName = chat.title || 'کانال';
+    }
+
+    return {
+      id: Number(chat.id),
+      type: isSaved ? 'saved' : chat.type,
+      username: chat.username || null,
+      is_saved: isSaved,
+      is_official: !!chat.is_official,
+      category_id: chat.category_id ? Number(chat.category_id) : null,
+      can_send: canSend,
+      title: isSaved ? 'پیام‌های ذخیره‌شده' : chat.title,
+      about: chat.about || null,
+      avatar_url: isSaved ? null : fileUrl(chat.avatar_file_id),
+      member_count: isSaved ? 1 : chatMemberCount(chatId),
+      role: member.role,
+      peer,
+      max_peer_read_id: maxPeerRead,
+      invite_code: inviteCode,
+      pinned: !!member.pinned,
+      pinned_message_id: chat.pinned_message_id ? Number(chat.pinned_message_id) : null,
+      pinned_message: pinnedMsg,
+      topics_enabled: !!chat.topics_enabled,
+      muted_until: Number(member.muted_until || 0),
+      is_muted: isMuted,
+      unread_count: unread,
+      updated_at: last ? Number(last.created_at) : Number(chat.created_at),
+      last_message: last
+        ? {
+            id: Number(last.id),
+            sender_id: (isChannel && !isMod) ? 0 : Number(last.sender_id),
+            sender_name: lastSenderName,
+            text: last.text,
+            is_service: !!last.is_service,
+            is_silent: !!last.is_silent,
+            is_voice: !!(last.is_voice || (last.file_mime && last.file_mime.startsWith('audio/'))),
+            edited_at: last.edited_at ? Number(last.edited_at) : null,
+            created_at: Number(last.created_at),
+            file: last.file_id ? { mime: last.file_mime, name: last.file_name } : null,
+          }
+        : null,
+    };
+  }
+
+  // فرآیند پس‌زمینه برای ارسال پیام‌های زمان‌بندی‌شده
+  const schedTimer = setInterval(() => {
+    try {
+      const now = Date.now();
+      const due = db.prepare('SELECT * FROM scheduled_messages WHERE scheduled_for <= ?').all(now);
+      for (const s of due) {
+        db.prepare('DELETE FROM scheduled_messages WHERE id = ?').run(s.id);
+        const info = db
+          .prepare('INSERT INTO messages (chat_id, sender_id, text, file_id, reply_to_id, is_silent, is_voice, topic_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(s.chat_id, s.sender_id, s.text, s.file_id, s.reply_to_id, s.is_silent, s.is_voice || 0, s.topic_id || null, now);
+        const msgId = Number(info.lastInsertRowid);
+        db.prepare('UPDATE chat_members SET last_read_id = ? WHERE chat_id = ? AND user_id = ?').run(msgId, s.chat_id, s.sender_id);
+        const fullMsg = getMessageFull(msgId);
+        const members = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(s.chat_id);
+        for (const m of members) sock.emitToUser(m.user_id, 'message', messagePayload(fullMsg, m.user_id));
+        const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(s.chat_id);
+        const sender = getUserById(s.sender_id);
+        if (chat && sender) notifyNewMessage(db, chat, sender, messagePayload(fullMsg, 0));
+      }
+    } catch {}
+  }, 2000);
+  if (schedTimer && typeof schedTimer.unref === 'function') schedTimer.unref();
+
+  // حذف کامل گفتگو به‌همراه پیام‌ها و پاک‌سازی فایل‌های بی‌استفاده
+  function deleteChatCompletely(chatId) {
+    const chat = db.prepare('SELECT avatar_file_id FROM chats WHERE id = ?').get(chatId);
+    const fileIds = db
+      .prepare('SELECT DISTINCT file_id AS fid FROM messages WHERE chat_id = ? AND file_id IS NOT NULL')
+      .all(chatId)
+      .map((r) => r.fid);
+    db.prepare('DELETE FROM messages WHERE chat_id = ?').run(chatId);
+    db.prepare('DELETE FROM chat_members WHERE chat_id = ?').run(chatId);
+    db.prepare('DELETE FROM chats WHERE id = ?').run(chatId);
+    for (const fid of fileIds) cleanupFileIfUnused(fid);
+    if (chat && chat.avatar_file_id) cleanupFileIfUnused(chat.avatar_file_id);
+  }
+
+  // حذف فایل در صورت نبود هیچ ارجاعی
+  function cleanupFileIfUnused(fid) {
+    const used =
+      db.prepare('SELECT 1 AS x FROM messages WHERE file_id = ?').get(fid) ||
+      db.prepare('SELECT 1 AS x FROM users WHERE avatar_file_id = ?').get(fid) ||
+      db.prepare('SELECT 1 AS x FROM chats WHERE avatar_file_id = ?').get(fid);
+    if (used) return;
+    const f = db.prepare('SELECT * FROM files WHERE id = ?').get(fid);
+    if (!f) return;
+    try {
+      fs.unlinkSync(path.join(UPLOAD_DIR, f.stored_name));
+    } catch {}
+    db.prepare('DELETE FROM files WHERE id = ?').run(fid);
+  }
+
+  // حذف کامل و دائمی کاربر و تمامی پیام‌ها و فایل‌های مرتبط از سرور و دیتابیس
+  function deleteUserCompletely(userId) {
+    const u = getUserById(userId);
+    if (!u) return false;
+    if (u.username === 'safir') throw err(400, 'ربات سفیر قابل حذف نیست.');
+
+    // ۱. قطع تماس و سوکت‌های فعال
+    if (sock && typeof sock.terminateUserCall === 'function') {
+      sock.terminateUserCall(userId, 'user_deleted');
+    }
+    sock.disconnectUser(userId, 'حساب کاربری شما توسط مدیر سیستم به طور دائم از سرور حذف شد.');
+
+    // ۲. پیام‌های زمان‌بندی‌شده
+    db.prepare('DELETE FROM scheduled_messages WHERE sender_id = ?').run(userId);
+
+    // ۳. واکنش‌ها و آرا
+    db.prepare('DELETE FROM message_reactions WHERE user_id = ?').run(userId);
+    db.prepare('DELETE FROM poll_votes WHERE user_id = ?').run(userId);
+
+    // ۴. نشست‌ها و اعلانات
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
+    db.prepare('DELETE FROM push_subscriptions WHERE user_id = ?').run(userId);
+
+    // ۵. مسدودی‌ها و دسته‌بندی‌ها
+    db.prepare('DELETE FROM blocked_users WHERE user_id = ? OR blocked_id = ?').run(userId, userId);
+    db.prepare('DELETE FROM user_categories WHERE user_id = ?').run(userId);
+
+    // ۶. حذف چت‌های خصوصی دونفره این کاربر
+    const privateChats = db.prepare(`
+      SELECT c.id FROM chats c
+      JOIN chat_members cm ON cm.chat_id = c.id
+      WHERE c.type = 'private' AND cm.user_id = ?
+    `).all(userId);
+    for (const pc of privateChats) {
+      deleteChatCompletely(pc.id);
+    }
+
+    // ۷. گروه‌ها و کانال‌های ایجاد شده توسط کاربر: واگذاری مالکیت یا حذف در صورت خالی بودن
+    const ownedChats = db.prepare("SELECT id FROM chats WHERE created_by = ? AND type IN ('group', 'channel')").all(userId);
+    for (const oc of ownedChats) {
+      const nextOwner = db.prepare(`
+        SELECT user_id FROM chat_members
+        WHERE chat_id = ? AND user_id != ?
+        ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, joined_at ASC
+        LIMIT 1
+      `).get(oc.id, userId);
+      if (nextOwner) {
+        db.prepare('UPDATE chats SET created_by = ? WHERE id = ?').run(nextOwner.user_id, oc.id);
+        db.prepare("UPDATE chat_members SET role = 'owner' WHERE chat_id = ? AND user_id = ?").run(oc.id, nextOwner.user_id);
+      } else {
+        deleteChatCompletely(oc.id);
+      }
+    }
+
+    // ۸. عضویت در سایر گفتگوها
+    db.prepare('DELETE FROM chat_members WHERE user_id = ?').run(userId);
+
+    // ۹. پیام‌های ارسالی کاربر در سایر چت‌ها
+    const userMsgFiles = db.prepare('SELECT DISTINCT file_id FROM messages WHERE sender_id = ? AND file_id IS NOT NULL').all(userId);
+    db.prepare('DELETE FROM messages WHERE sender_id = ?').run(userId);
+    for (const r of userMsgFiles) {
+      cleanupFileIfUnused(r.file_id);
+    }
+
+    // ۱۰. فایل‌های آپلود شده توسط این کاربر
+    const userFiles = db.prepare('SELECT id, stored_name FROM files WHERE uploaded_by = ?').all(userId);
+    for (const f of userFiles) {
+      try {
+        const filePath = path.join(UPLOAD_DIR, f.stored_name);
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      } catch {}
+    }
+    db.prepare('DELETE FROM files WHERE uploaded_by = ?').run(userId);
+    if (u.avatar_file_id) cleanupFileIfUnused(u.avatar_file_id);
+
+    // ۱۱. حذف نهایی از جدول users
+    db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+    return true;
+  }
+
+  // ایجاد و همگام‌سازی چت‌های خصوصی بین تمام اعضای یک دسته‌بندی
+  function ensureCategoryPrivateChats(userId, categoryId) {
+    if (!userId || !categoryId) return;
+    const catMembers = db.prepare(`
+      SELECT DISTINCT u.id FROM users u
+      JOIN user_categories uc ON uc.user_id = u.id
+      WHERE uc.category_id = ? AND u.status = 'approved' AND u.id != ? AND u.username != 'safir'
+    `).all(categoryId, userId);
+
+    if (!catMembers.length) return;
+
+    const now = Date.now();
+    const createdOrUpdatedChats = [];
+
+    db.exec('BEGIN TRANSACTION');
+    try {
+      for (const other of catMembers) {
+        const otherId = Number(other.id);
+        const existing = db.prepare(`
+          SELECT c.id FROM chats c
+          JOIN chat_members a ON a.chat_id = c.id AND a.user_id = ?
+          JOIN chat_members b ON b.chat_id = c.id AND b.user_id = ?
+          WHERE c.type = 'private' AND c.is_saved = 0
+            AND (SELECT COUNT(*) FROM chat_members m WHERE m.chat_id = c.id) = 2
+        `).get(userId, otherId);
+
+        let chatId;
+        if (!existing) {
+          const info = db.prepare(
+            "INSERT INTO chats (type, title, category_id, created_by, created_at) VALUES ('private', NULL, ?, ?, ?)"
+          ).run(categoryId, userId, now);
+          chatId = Number(info.lastInsertRowid);
+          db.prepare("INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)").run(chatId, userId, now);
+          db.prepare("INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)").run(chatId, otherId, now);
+        } else {
+          chatId = Number(existing.id);
+          db.prepare("UPDATE chats SET category_id = ? WHERE id = ?").run(categoryId, chatId);
+        }
+        createdOrUpdatedChats.push({ chatId, otherId });
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      try { db.exec('ROLLBACK'); } catch {}
+      console.error('[DB] Failed to ensure category private chats:', e);
+      return;
+    }
+
+    // انتشار رویدادهای زنده سوکت به کاربران آنلاین
+    for (const { chatId, otherId } of createdOrUpdatedChats) {
+      const chatItemUser = chatListItem(chatId, userId);
+      if (chatItemUser) sock.emitToUser(userId, 'chat', chatItemUser);
+      const chatItemOther = chatListItem(chatId, otherId);
+      if (chatItemOther) sock.emitToUser(otherId, 'chat', chatItemOther);
+    }
+  }
+
+  // همگام‌سازی کامل چت‌های اعضای تمامی دسته‌بندی‌ها
+  function syncAllCategoryPrivateChats() {
+    try {
+      const cats = db.prepare('SELECT id FROM categories').all();
+      db.exec('BEGIN TRANSACTION');
+      for (const c of cats) {
+        const members = db.prepare(`
+          SELECT DISTINCT u.id FROM users u
+          JOIN user_categories uc ON uc.user_id = u.id
+          WHERE uc.category_id = ? AND u.status = 'approved' AND u.username != 'safir'
+        `).all(c.id);
+        for (let i = 0; i < members.length; i++) {
+          for (let j = i + 1; j < members.length; j++) {
+            const u1 = Number(members[i].id);
+            const u2 = Number(members[j].id);
+            const existing = db.prepare(`
+              SELECT c.id FROM chats c
+              JOIN chat_members a ON a.chat_id = c.id AND a.user_id = ?
+              JOIN chat_members b ON b.chat_id = c.id AND b.user_id = ?
+              WHERE c.type = 'private' AND c.is_saved = 0
+                AND (SELECT COUNT(*) FROM chat_members m WHERE m.chat_id = c.id) = 2
+            `).get(u1, u2);
+            if (!existing) {
+              const now = Date.now();
+              const info = db.prepare(
+                "INSERT INTO chats (type, title, category_id, created_by, created_at) VALUES ('private', NULL, ?, ?, ?)"
+              ).run(c.id, u1, now);
+              const chatId = Number(info.lastInsertRowid);
+              db.prepare("INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)").run(chatId, u1, now);
+              db.prepare("INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)").run(chatId, u2, now);
+            }
+          }
+        }
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      try { db.exec('ROLLBACK'); } catch {}
+      console.error('[DB] Failed to sync all category private chats:', e);
+    }
+  }
+  syncAllCategoryPrivateChats();
+
+  /* ---------------- احراز هویت ---------------- */
+
+  function auth(req, res, next) {
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : req.query.token || '';
+    const row = token
+      ? db.prepare('SELECT u.*, s.token AS session_token FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?').get(token)
+      : null;
+    if (!row) return next(err(401, 'ابتدا وارد حساب خود شوید.'));
+
+    if (row.status === 'banned') {
+      return next(err(403, 'این حساب بن شده است'));
+    }
+    if (row.status === 'temp_banned') {
+      const now = Date.now();
+      if (row.banned_until && now < Number(row.banned_until)) {
+        return next(err(403, `این حساب بن شده است. زمان باقی‌مانده تا رفع مسدودیت: ${formatRemainingBanTime(Number(row.banned_until) - now)}`));
+      } else {
+        db.prepare("UPDATE users SET status = 'approved', banned_until = NULL WHERE id = ?").run(row.id);
+        row.status = 'approved';
+      }
+    }
+
+    req.user = row;
+    req.token = token;
+    next();
+  }
+
+  function requireApproved(req, res, next) {
+    if (req.user && req.user.status === 'pending') {
+      return next(err(403, 'حساب شما در انتظار تایید ادمین است و دسترسی به این بخش را ندارید.'));
+    }
+    next();
+  }
+
+  function sendSafirBotMessage(toUserId, text) {
+    const safir = ensureSafirBot();
+    if (!safir || Number(safir.id) === Number(toUserId)) return null;
+    let chatId;
+    const existing = db.prepare(`
+      SELECT c.id FROM chats c
+      JOIN chat_members m1 ON m1.chat_id = c.id AND m1.user_id = ?
+      JOIN chat_members m2 ON m2.chat_id = c.id AND m2.user_id = ?
+      WHERE c.type = 'private' AND c.is_saved = 0
+    `).get(safir.id, toUserId);
+    if (existing) {
+      chatId = Number(existing.id);
+    } else {
+      const now = Date.now();
+      const cInfo = db.prepare("INSERT INTO chats (type, created_by, created_at) VALUES ('private', ?, ?)").run(safir.id, now);
+      chatId = Number(cInfo.lastInsertRowid);
+      db.prepare("INSERT INTO chat_members (chat_id, user_id, joined_at) VALUES (?, ?, ?)").run(chatId, safir.id, now);
+      db.prepare("INSERT INTO chat_members (chat_id, user_id, joined_at) VALUES (?, ?, ?)").run(chatId, toUserId, now);
+    }
+    const now = Date.now();
+    const mInfo = db.prepare("INSERT INTO messages (chat_id, sender_id, text, created_at) VALUES (?, ?, ?, ?)").run(chatId, safir.id, text, now);
+    const msgId = Number(mInfo.lastInsertRowid);
+    db.prepare("UPDATE chat_members SET last_read_id = ? WHERE chat_id = ? AND user_id = ?").run(msgId, chatId, safir.id);
+    const payload = messagePayload(getMessageFull(msgId));
+    sock.emitToUser(toUserId, 'message', payload);
+    const chatItem = chatListItem(chatId, toUserId);
+    if (chatItem) sock.emitToUser(toUserId, 'chat', chatItem);
+    sendPushToUser(db, toUserId, {
+      title: 'سفیر (قاسم‌گرام)',
+      body: text,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      tag: `chat-${chatId}`,
+      renotify: true,
+      data: { url: `/#c=${chatId}`, chatId, messageId: msgId }
+    });
+    return { chatId, msgId, payload };
+  }
+
+  api.get('/health', (req, res) => res.json({ ok: true }));
+
+  api.post(
+    '/auth/register',
+    upload.single('avatar'),
+    h(async (req, res) => {
+      const username = String(req.body.username || '').trim();
+      const password = String(req.body.password || '');
+      const display_name = String(req.body.display_name || '').trim();
+
+      if (!USERNAME_RE.test(username)) throw err(400, 'نام کاربری باید ۳ تا ۲۴ نویسه باشد: حروف انگلیسی، عدد یا _');
+      if (password.length < 6) throw err(400, 'رمز عبور باید حداقل ۶ کاراکتر باشد.');
+      if (!display_name || display_name.length > 50) throw err(400, 'نام نمایشی را وارد کنید (حداکثر ۵۰ کاراکتر).');
+      if (db.prepare('SELECT id FROM users WHERE username = ?').get(username)) {
+        throw err(409, 'این نام کاربری قبلاً ثبت شده است.');
+      }
+
+      let avatarFileId = null;
+      if (req.file) avatarFileId = saveFile(req.file, null);
+
+      const now = Date.now();
+      const info = db
+        .prepare('INSERT INTO users (username, password_hash, display_name, avatar_file_id, status, last_seen_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(username, hashPassword(password), display_name, avatarFileId, 'pending', now, now);
+      const userId = Number(info.lastInsertRowid);
+      if (avatarFileId) {
+        db.prepare('UPDATE files SET uploaded_by = ? WHERE id = ?').run(userId, avatarFileId);
+      }
+
+      const token = newToken();
+      const ua = req.headers['user-agent'] || '';
+      const ip = req.ip || req.socket?.remoteAddress || '';
+      db.prepare('INSERT INTO sessions (token, user_id, created_at, user_agent, ip, last_active_at) VALUES (?, ?, ?, ?, ?, ?)').run(token, userId, now, ua, ip, now);
+
+      // ارسال پیام توسط ربات سفیر: "شما در انتظار تایید ادمین هستید"
+      sendSafirBotMessage(userId, 'شما در انتظار تایید ادمین هستید');
+
+      const u = getUserById(userId);
+      res.json({ token, user: { ...userPublic(u), last_seen_at: u.last_seen_at } });
+    })
+  );
+
+  api.post(
+    '/auth/login',
+    h(async (req, res) => {
+      const username = String(req.body.username || '').trim();
+      const password = String(req.body.password || '');
+      const u = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+      if (!u || !verifyPassword(password, u.password_hash)) throw err(401, 'نام کاربری یا رمز عبور اشتباه است.');
+
+      if (u.status === 'banned') {
+        throw err(403, 'این حساب بن شده است');
+      }
+      if (u.status === 'temp_banned') {
+        const now = Date.now();
+        if (u.banned_until && now < Number(u.banned_until)) {
+          const remainingMs = Number(u.banned_until) - now;
+          throw err(403, `این حساب بن شده است. زمان باقی‌مانده تا رفع مسدودیت: ${formatRemainingBanTime(remainingMs)}`);
+        } else {
+          db.prepare("UPDATE users SET status = 'approved', banned_until = NULL WHERE id = ?").run(u.id);
+          u.status = 'approved';
+        }
+      }
+
+      const token = newToken();
+      const now = Date.now();
+      const ua = req.headers['user-agent'] || '';
+      const ip = req.ip || req.socket?.remoteAddress || '';
+      db.prepare('INSERT INTO sessions (token, user_id, created_at, user_agent, ip, last_active_at) VALUES (?, ?, ?, ?, ?, ?)').run(token, u.id, now, ua, ip, now);
+      db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(now, u.id);
+      res.json({ token, user: { ...userPublic(u), last_seen_at: u.last_seen_at } });
+    })
+  );
+
+  api.post(
+    '/auth/logout',
+    auth,
+    h(async (req, res) => {
+      db.prepare('DELETE FROM sessions WHERE token = ?').run(req.token);
+      db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(Date.now(), req.user.id);
+      res.json({ ok: true });
+    })
+  );
+
+  /* ---------------- نشست‌ها و دستگاه‌های متصل ---------------- */
+
+  api.get(
+    '/sessions',
+    auth,
+    h(async (req, res) => {
+      const rows = db.prepare('SELECT token, created_at, user_agent, ip, last_active_at FROM sessions WHERE user_id = ? ORDER BY created_at DESC').all(req.user.id);
+      const sessions = rows.map((r) => {
+        const isCurrent = r.token === req.token;
+        const device = parseDevice(r.user_agent);
+        return {
+          id: r.token.slice(0, 16),
+          is_current: isCurrent,
+          created_at: Number(r.created_at),
+          last_active_at: Number(r.last_active_at || r.created_at),
+          device,
+          ip: r.ip || '',
+        };
+      });
+      res.json({ sessions });
+    })
+  );
+
+  api.delete(
+    '/sessions/:id',
+    auth,
+    h(async (req, res) => {
+      const safeId = String(req.params.id);
+      const row = db.prepare('SELECT token FROM sessions WHERE user_id = ? AND token LIKE ?').get(req.user.id, safeId + '%');
+      if (!row) throw err(404, 'نشست پیدا نشد.');
+      if (row.token === req.token) {
+        throw err(400, 'امکان پایان دادن به نشست کنونی از اینجا وجود ندارد.');
+      }
+      db.prepare('DELETE FROM sessions WHERE token = ?').run(row.token);
+      sock.disconnectSession(row.token, 'اتصال دستگاه شما توسط کاربر قطع شد.');
+      res.json({ ok: true, message: 'اتصال دستگاه بسته شد.' });
+    })
+  );
+
+  api.post(
+    '/sessions/terminate-others',
+    auth,
+    h(async (req, res) => {
+      const otherTokens = db.prepare('SELECT token FROM sessions WHERE user_id = ? AND token != ?').all(req.user.id, req.token);
+      db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(req.user.id, req.token);
+      for (const r of otherTokens) {
+        sock.disconnectSession(r.token, 'سایر نشست‌های شما خاتمه یافت.');
+      }
+      res.json({ ok: true, message: 'همه دستگاه‌ها به جز این دستگاه بسته شدند.' });
+    })
+  );
+
+  api.get('/me', auth, h(async (req, res) => {
+    res.json({ ...userPublic(req.user, req.user.id), last_seen_at: req.user.last_seen_at });
+  }));
+
+  api.put(
+    '/me',
+    auth,
+    upload.single('avatar'),
+    h(async (req, res) => {
+      const display_name = String(req.body.display_name || '').trim();
+      if (!display_name || display_name.length > 50) throw err(400, 'نام نمایشی نامعتبر است.');
+      let avatarFileId = req.user.avatar_file_id;
+      if (req.file) avatarFileId = saveFile(req.file, req.user.id);
+      const bio = req.body.bio !== undefined ? String(req.body.bio || '').trim().slice(0, 150) : (req.user.bio || '');
+      const privacy = req.body.privacy_last_seen === 'nobody' ? 'nobody' : (req.user.privacy_last_seen || 'everyone');
+      db.prepare('UPDATE users SET display_name = ?, avatar_file_id = ?, bio = ?, privacy_last_seen = ? WHERE id = ?')
+        .run(display_name, avatarFileId, bio, privacy, req.user.id);
+      const u = getUserById(req.user.id);
+      res.json({ ...userPublic(u, req.user.id), last_seen_at: u.last_seen_at });
+    })
+  );
+
+  api.put(
+    '/me/privacy',
+    auth,
+    h(async (req, res) => {
+      const privacy = req.body.privacy_last_seen === 'nobody' ? 'nobody' : 'everyone';
+      db.prepare('UPDATE users SET privacy_last_seen = ? WHERE id = ?').run(privacy, req.user.id);
+      res.json({ ok: true, privacy_last_seen: privacy });
+    })
+  );
+
+  api.get(
+    '/me/blocked',
+    auth,
+    h(async (req, res) => {
+      const rows = db.prepare(`
+        SELECT u.*, b.created_at AS blocked_at
+        FROM blocked_users b
+        JOIN users u ON u.id = b.blocked_id
+        WHERE b.user_id = ?
+        ORDER BY b.created_at DESC
+      `).all(req.user.id);
+      res.json({ blocked: rows.map((u) => userPublic(u, req.user.id)) });
+    })
+  );
+
+  api.post(
+    '/users/:id/block',
+    auth,
+    h(async (req, res) => {
+      const targetId = Number(req.params.id);
+      if (!targetId || targetId === req.user.id) throw err(400, 'شناسه کاربر نامعتبر است.');
+      if (!getUserById(targetId)) throw err(404, 'کاربر پیدا نشد.');
+      db.prepare('INSERT OR IGNORE INTO blocked_users (user_id, blocked_id, created_at) VALUES (?, ?, ?)')
+        .run(req.user.id, targetId, Date.now());
+      res.json({ ok: true, blocked: true });
+    })
+  );
+
+  api.post(
+    '/users/:id/unblock',
+    auth,
+    h(async (req, res) => {
+      const targetId = Number(req.params.id);
+      db.prepare('DELETE FROM blocked_users WHERE user_id = ? AND blocked_id = ?').run(req.user.id, targetId);
+      res.json({ ok: true, blocked: false });
+    })
+  );
+
+  /* ---------------- کاربران و جستجو ---------------- */
+
+  api.get(
+    '/users',
+    auth,
+    h(async (req, res) => {
+      const q = String(req.query.q || '').trim();
+      const like = `%${q}%`;
+      let rows;
+      if (req.user.is_special) {
+        rows = db
+          .prepare(`SELECT id, username, display_name, avatar_file_id, category_id, is_special, status FROM users
+                    WHERE id != ? AND (? = '' OR username LIKE ? OR display_name LIKE ?)
+                    ORDER BY display_name LIMIT 200`)
+          .all(req.user.id, q, like, like);
+      } else {
+        rows = db
+          .prepare(`SELECT id, username, display_name, avatar_file_id, category_id, is_special, status FROM users
+                    WHERE id != ? AND status = 'approved'
+                      AND (? = '' OR username LIKE ? OR display_name LIKE ?)
+                      AND (
+                        id IN (
+                          SELECT uc2.user_id FROM user_categories uc2
+                          WHERE uc2.category_id IN (SELECT uc1.category_id FROM user_categories uc1 WHERE uc1.user_id = ?)
+                        )
+                        OR category_id = ?
+                        OR is_special = 1
+                        OR username = 'safir'
+                      )
+                    ORDER BY display_name LIMIT 200`)
+          .all(req.user.id, q, like, like, req.user.id, req.user.category_id || 0);
+      }
+      res.json({ users: rows.map(userPublic) });
+    })
+  );
+
+  // فقط کاربرانی که با آنها گفتگوی خصوصی داشته‌ام (مخاطبین من)
+  api.get(
+    '/contacts',
+    auth,
+    h(async (req, res) => {
+      const q = String(req.query.q || '').trim();
+      const like = `%${q}%`;
+      let rows;
+      if (req.user.is_special) {
+        rows = db
+          .prepare(`
+            SELECT DISTINCT u.id, u.username, u.display_name, u.avatar_file_id, u.category_id, u.is_special, u.status
+            FROM users u
+            JOIN chat_members cm_peer ON cm_peer.user_id = u.id
+            JOIN chats c ON c.id = cm_peer.chat_id
+            JOIN chat_members cm_me ON cm_me.chat_id = c.id AND cm_me.user_id = ?
+            WHERE u.id != ? AND c.type = 'private'
+              AND (? = '' OR u.username LIKE ? OR u.display_name LIKE ?)
+            ORDER BY u.display_name
+          `)
+          .all(req.user.id, req.user.id, q, like, like);
+      } else {
+        rows = db
+          .prepare(`
+            SELECT DISTINCT u.id, u.username, u.display_name, u.avatar_file_id, u.category_id, u.is_special, u.status
+            FROM users u
+            JOIN chat_members cm_peer ON cm_peer.user_id = u.id
+            JOIN chats c ON c.id = cm_peer.chat_id
+            JOIN chat_members cm_me ON cm_me.chat_id = c.id AND cm_me.user_id = ?
+            WHERE u.id != ? AND c.type = 'private' AND u.status = 'approved'
+              AND (? = '' OR u.username LIKE ? OR u.display_name LIKE ?)
+              AND (
+                u.id IN (
+                  SELECT uc2.user_id FROM user_categories uc2
+                  WHERE uc2.category_id IN (SELECT uc1.category_id FROM user_categories uc1 WHERE uc1.user_id = ?)
+                )
+                OR u.category_id = ?
+                OR u.is_special = 1
+                OR u.username = 'safir'
+              )
+            ORDER BY u.display_name
+          `)
+          .all(req.user.id, req.user.id, q, like, like, req.user.id, req.user.category_id || 0);
+      }
+      res.json({ contacts: rows.map(userPublic) });
+    })
+  );
+
+  // لیست کاربرانی که پیام گروهی را خوانده‌اند
+  api.get(
+    '/messages/:id/seen-by',
+    auth,
+    h(async (req, res) => {
+      const msgId = Number(req.params.id);
+      const msg = db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId);
+      if (!msg) throw err(404, 'پیام پیدا نشد.');
+      const member = getMembership(msg.chat_id, req.user.id);
+      if (!member) throw err(403, 'دسترسی ندارید.');
+      // فقط برای گروه‌ها
+      const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(msg.chat_id);
+      if (!chat || chat.type !== 'group') throw err(400, 'این قابلیت فقط برای گروه‌ها موجود است.');
+      // کاربرانی که last_read_id >= msgId دارند (به جز فرستنده)
+      const readers = db.prepare(`
+        SELECT u.id, u.display_name, u.username, u.avatar_file_id, cm.last_read_id AS seen_at
+        FROM chat_members cm
+        JOIN users u ON u.id = cm.user_id
+        WHERE cm.chat_id = ? AND cm.last_read_id >= ? AND cm.user_id != ?
+        ORDER BY cm.last_read_id DESC
+      `).all(msg.chat_id, msgId, msg.sender_id);
+      res.json({
+        seen_by: readers.map((u) => ({
+          id: Number(u.id),
+          display_name: u.display_name,
+          username: u.username,
+          avatar_url: fileUrl(u.avatar_file_id),
+          seen_at: Number(u.seen_at) || null,
+        })),
+      });
+    })
+  );
+
+  api.get(
+    '/search/users',
+    auth,
+    h(async (req, res) => {
+      const q = String(req.query.q || '').trim();
+      if (!q) return res.json({ users: [] });
+      const like = `%${q}%`;
+      let rows;
+      if (req.user.is_special) {
+        rows = db
+          .prepare(`SELECT id, username, display_name, avatar_file_id, category_id, is_special, status FROM users
+                    WHERE id != ? AND (username LIKE ? OR display_name LIKE ?)
+                    ORDER BY username LIMIT 20`)
+          .all(req.user.id, like, like);
+      } else {
+        rows = db
+          .prepare(`SELECT id, username, display_name, avatar_file_id, category_id, is_special, status FROM users
+                    WHERE id != ? AND status = 'approved'
+                      AND (username LIKE ? OR display_name LIKE ?)
+                      AND (
+                        id IN (
+                          SELECT uc2.user_id FROM user_categories uc2
+                          WHERE uc2.category_id IN (SELECT uc1.category_id FROM user_categories uc1 WHERE uc1.user_id = ?)
+                        )
+                        OR category_id = ?
+                        OR is_special = 1
+                        OR username = 'safir'
+                      )
+                    ORDER BY username LIMIT 20`)
+          .all(req.user.id, like, like, req.user.id, req.user.category_id || 0);
+      }
+      res.json({ users: rows.map(userPublic) });
+    })
+  );
+
+  api.get(
+    '/search/channels',
+    auth,
+    h(async (req, res) => {
+      const raw = String(req.query.q || '').trim();
+      const q = raw.replace(/^@/, '');
+      if (!q) return res.json({ channels: [] });
+      const like = `%${q}%`;
+      let rows;
+      if (req.user.is_special) {
+        rows = db
+          .prepare(`SELECT id, title, username, about, avatar_file_id, category_id, is_official
+                    FROM chats
+                    WHERE type = 'channel' AND (username LIKE ? OR title LIKE ?)
+                    ORDER BY is_official DESC, title LIMIT 20`)
+          .all(like, like);
+      } else {
+        const catIds = getUserCategoryIds(req.user.id);
+        const inClause = catIds.length > 0 ? catIds.map(() => '?').join(',') : '0';
+        rows = db
+          .prepare(`SELECT id, title, username, about, avatar_file_id, category_id, is_official
+                    FROM chats
+                    WHERE type = 'channel'
+                      AND (username LIKE ? OR title LIKE ?)
+                      AND (category_id IS NULL OR is_official = 1 OR category_id IN (${inClause}))
+                    ORDER BY is_official DESC, title LIMIT 20`)
+          .all(like, like, ...catIds);
+      }
+      res.json({
+        channels: rows.map((c) => ({
+          id: Number(c.id),
+          type: 'channel',
+          title: c.title,
+          username: c.username || null,
+          about: c.about || '',
+          avatar_url: fileUrl(c.avatar_file_id),
+          member_count: chatMemberCount(c.id),
+          is_official: !!c.is_official,
+        })),
+      });
+    })
+  );
+
+  /* ---------------- گفتگوها ---------------- */
+
+  api.get(
+    '/chats',
+    auth,
+    h(async (req, res) => {
+      const rows = db.prepare('SELECT chat_id FROM chat_members WHERE user_id = ?').all(req.user.id);
+      let items = rows.map((r) => chatListItem(r.chat_id, req.user.id)).filter(Boolean);
+      items.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated_at - a.updated_at);
+      if (req.user && req.user.status === 'pending') {
+        const safir = ensureSafirBot();
+        items = items.filter((c) => c.peer && Number(c.peer.id) === Number(safir.id));
+      }
+      res.json({ chats: items });
+    })
+  );
+
+  api.get(
+    '/chats/:id',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+      if (!chat) throw err(404, 'گفتگو پیدا نشد.');
+      const member = getMembership(chatId, req.user.id);
+      if (!member) throw err(403, 'به این گفتگو دسترسی ندارید.');
+
+      if (req.user && req.user.status === 'pending') {
+        const safir = ensureSafirBot();
+        const isSafirChat = db.prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?').get(chatId, safir.id);
+        if (!isSafirChat) {
+          throw err(403, 'حساب شما در انتظار تایید است و فقط مجاز به مشاهده پیام‌های سفیر هستید.');
+        }
+      }
+
+      // بررسی دسته‌بندی برای گروه‌ها و کانال‌های غیررسمی
+      if (!chat.is_official && (chat.type === 'group' || chat.type === 'channel') && !req.user.is_special) {
+        const chatCatId = chat.category_id || (getUserById(chat.created_by)?.category_id);
+        if (chatCatId) {
+          const uCats = getUserCategoryIds(req.user.id);
+          if (!uCats.includes(Number(chatCatId))) {
+            throw err(403, 'دسترسی به این گفتگو برای دسته‌بندی شما مجاز نیست.');
+          }
+        }
+      }
+
+      const item = chatListItem(chatId, req.user.id);
+      if (!item) throw err(404, 'گفتگو پیدا نشد.');
+      if (chat.type === 'channel' && !isModerator(member)) {
+        // کاربران عادی کانال به هیچ‌وجه نباید لیست اعضا را دریافت کنند
+        item.members = [];
+      } else {
+        const members = db
+          .prepare(`SELECT u.id, u.username, u.display_name, u.avatar_file_id, cm.role, cm.joined_at, u.category_id, u.is_special
+                    FROM chat_members cm JOIN users u ON u.id = cm.user_id
+                    WHERE cm.chat_id = ?
+                    ORDER BY CASE cm.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, cm.joined_at, u.display_name`)
+          .all(chatId);
+        item.members = members.map((u) => ({ ...userPublic(u), role: u.role }));
+      }
+      res.json(item);
+    })
+  );
+
+  // شروع یا بازکردن چت خصوصی با یک کاربر
+  api.post(
+    '/chats/private',
+    auth,
+    requireApproved,
+    h(async (req, res) => {
+      const targetId = Number(req.body.user_id);
+      if (!targetId || targetId === req.user.id) throw err(400, 'کاربر نامعتبر است.');
+      const target = getUserById(targetId);
+      if (!target || target.status !== 'approved') throw err(404, 'کاربر پیدا نشد.');
+      if (isBlockedBetween(req.user.id, targetId)) throw err(403, 'ارتباط با این کاربر مسدود است.');
+
+      // بررسی عدم خروج از دسته‌بندی
+      const viewerIsSpecial = !!req.user.is_special;
+      const targetIsSpecial = !!target.is_special;
+      const targetIsSafir = target.username === 'safir';
+      const uCats = getUserCategoryIds(req.user.id);
+      const targetCats = getUserCategoryIds(target.id);
+      const shareCat = uCats.some((cid) => targetCats.includes(cid));
+
+      if (!viewerIsSpecial && !targetIsSpecial && !targetIsSafir && !shareCat) {
+        throw err(404, 'کاربر پیدا نشد.');
+      }
+
+      const existing = db
+        .prepare(`SELECT c.id FROM chats c
+                  JOIN chat_members a ON a.chat_id = c.id AND a.user_id = ?
+                  JOIN chat_members b ON b.chat_id = c.id AND b.user_id = ?
+                  WHERE c.type = 'private' AND c.is_saved = 0 AND (SELECT COUNT(*) FROM chat_members m WHERE m.chat_id = c.id) = 2`)
+        .get(req.user.id, targetId);
+
+      if (existing) {
+        return res.json({ chat_id: Number(existing.id), created: false, chat: chatListItem(existing.id, req.user.id) });
+      }
+
+      const now = Date.now();
+      db.exec('BEGIN');
+      try {
+        const info = db
+          .prepare("INSERT INTO chats (type, title, avatar_file_id, created_by, created_at) VALUES ('private', NULL, NULL, ?, ?)")
+          .run(req.user.id, now);
+        const chatId = Number(info.lastInsertRowid);
+        const ins = db.prepare('INSERT INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)');
+        ins.run(chatId, req.user.id, 'member', now);
+        ins.run(chatId, targetId, 'member', now);
+        db.exec('COMMIT');
+        sock.emitToUser(targetId, 'chat', chatListItem(chatId, targetId));
+        res.json({ chat_id: chatId, created: true, chat: chatListItem(chatId, req.user.id) });
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+    })
+  );
+
+  // دریافت یا ساخت گفتگوی پیام‌های ذخیره‌شده (Saved Messages)
+  api.post(
+    '/chats/saved',
+    auth,
+    h(async (req, res) => {
+      const existing = db.prepare('SELECT id FROM chats WHERE is_saved = 1 AND created_by = ?').get(req.user.id);
+      if (existing) {
+        return res.json({ chat_id: Number(existing.id), chat: chatListItem(existing.id, req.user.id) });
+      }
+      const now = Date.now();
+      db.exec('BEGIN');
+      try {
+        const info = db
+          .prepare("INSERT INTO chats (type, title, is_saved, created_by, created_at) VALUES ('private', 'پیام‌های ذخیره‌شده', 1, ?, ?)")
+          .run(req.user.id, now);
+        const chatId = Number(info.lastInsertRowid);
+        db.prepare("INSERT INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, 'owner', ?)").run(chatId, req.user.id, now);
+        db.exec('COMMIT');
+        res.json({ chat_id: chatId, chat: chatListItem(chatId, req.user.id) });
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+    })
+  );
+
+  // ساخت گروه یا کانال
+  api.post(
+    '/chats',
+    auth,
+    requireApproved,
+    upload.single('avatar'),
+    h(async (req, res) => {
+      const type = String(req.body.type || '');
+      if (!['group', 'channel'].includes(type)) throw err(400, 'نوع گفتگو نامعتبر است.');
+      const title = String(req.body.title || '').trim();
+      if (!title || title.length > 80) {
+        throw err(400, type === 'group' ? 'نام گروه را وارد کنید.' : 'نام کانال را وارد کنید.');
+      }
+      const about = String(req.body.about || '').trim().slice(0, 300);
+
+      let channelUsername = null;
+      if (type === 'channel') {
+        channelUsername = String(req.body.username || '').trim().toLowerCase().replace(/^@/, '');
+        if (!channelUsername) {
+          throw err(400, 'وارد کردن شناسه کاربری (یوزرنیم) برای کانال الزامی است.');
+        }
+        if (!USERNAME_RE.test(channelUsername)) {
+          throw err(400, 'شناسه کاربری کانال باید بین ۳ تا ۲۴ کاراکتر و فقط شامل حروف انگلیسی، اعداد و زیرخط (_) باشد.');
+        }
+        // بررسی یکتایی در کل سامانه (کانال‌ها و کاربران)
+        const chatExists = db.prepare('SELECT 1 FROM chats WHERE username = ? COLLATE NOCASE').get(channelUsername);
+        if (chatExists) {
+          throw err(400, 'این شناسه کاربری قبلاً برای کانال دیگری ثبت شده است.');
+        }
+        const userExists = db.prepare('SELECT 1 FROM users WHERE username = ? COLLATE NOCASE').get(channelUsername);
+        if (userExists) {
+          throw err(400, 'این شناسه کاربری متعلق به یک کاربر است و امکان استفاده برای کانال را ندارد.');
+        }
+      }
+
+      let memberIds = [];
+      try {
+        if (Array.isArray(req.body.member_ids)) {
+          memberIds = req.body.member_ids.map(Number).filter(Boolean);
+        } else if (typeof req.body.member_ids === 'string') {
+          const parsed = JSON.parse(req.body.member_ids);
+          memberIds = Array.isArray(parsed) ? parsed.map(Number).filter(Boolean) : [];
+        }
+      } catch {
+        memberIds = [];
+      }
+      memberIds = [...new Set(memberIds)].filter((id) => id !== req.user.id);
+      const myCatIds = getUserCategoryIds(req.user.id);
+      let chatCat = req.body.category_id ? Number(req.body.category_id) : (myCatIds.length > 0 ? myCatIds[0] : (req.user.category_id || null));
+      if (chatCat && !req.user.is_special && myCatIds.length > 0 && !myCatIds.includes(chatCat)) {
+        chatCat = myCatIds[0];
+      }
+      for (const id of memberIds) {
+        const u = getUserById(id);
+        if (!u) throw err(400, 'یکی از اعضای انتخاب‌شده پیدا نشد.');
+        if (!req.user.is_special && !u.is_special && u.username !== 'safir') {
+          if (chatCat) {
+            const uCats = getUserCategoryIds(u.id);
+            if (!uCats.includes(chatCat)) {
+              throw err(400, `کاربر «${u.display_name}» به دلیل عدم تطابق دسته‌بندی امکان افزودن به این گفتگو را ندارد.`);
+            }
+          }
+        }
+      }
+
+      let avatarFileId = null;
+      if (req.file) avatarFileId = saveFile(req.file, req.user.id);
+
+      const now = Date.now();
+      let chatId;
+      db.exec('BEGIN');
+      try {
+        const info = db
+          .prepare('INSERT INTO chats (type, title, about, username, avatar_file_id, category_id, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(type, title, about || null, channelUsername, avatarFileId, chatCat, req.user.id, now);
+        chatId = Number(info.lastInsertRowid);
+        db.prepare('INSERT INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)').run(chatId, req.user.id, 'owner', now);
+        const ins = db.prepare('INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)');
+        for (const id of memberIds) ins.run(chatId, id, 'member', now);
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+
+      if (type === 'group') {
+        postServiceMessage(chatId, req.user.id, `«${req.user.display_name}» گروه «${title}» را ایجاد کرد`);
+      }
+
+      for (const id of memberIds) sock.emitToUser(id, 'chat', chatListItem(chatId, id));
+      res.json({ chat_id: chatId, chat: chatListItem(chatId, req.user.id) });
+    })
+  );
+
+  // ویرایش گروه/کانال (نام، توضیحات، عکس و یوزرنیم کانال) — فقط مدیران
+  api.put(
+    '/chats/:id',
+    auth,
+    upload.single('avatar'),
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+      if (!chat) throw err(404, 'گفتگو پیدا نشد.');
+      if (chat.type === 'private') throw err(400, 'گفتگوی خصوصی قابل ویرایش نیست.');
+      const me = getMembership(chatId, req.user.id);
+      if (!isModerator(me)) throw err(403, 'فقط مدیران می‌توانند گفتگو را ویرایش کنند.');
+
+      const title = String(req.body.title || '').trim();
+      if (!title || title.length > 80) throw err(400, 'نام گفتگو نامعتبر است.');
+      const about = String(req.body.about || '').trim().slice(0, 300);
+      let avatarFileId = chat.avatar_file_id;
+      if (req.file) avatarFileId = saveFile(req.file, req.user.id);
+
+      let channelUsername = chat.username;
+      if (chat.type === 'channel' && req.body.username !== undefined) {
+        const u = String(req.body.username || '').trim().toLowerCase().replace(/^@/, '');
+        if (!u) {
+          throw err(400, 'شناسه کاربری کانال نمی‌تواند خالی باشد.');
+        }
+        if (!USERNAME_RE.test(u)) {
+          throw err(400, 'شناسه کاربری باید بین ۳ تا ۲۴ کاراکتر و فقط شامل حروف انگلیسی، اعداد و زیرخط (_) باشد.');
+        }
+        if (u !== (chat.username || '').toLowerCase()) {
+          const chatExists = db.prepare('SELECT 1 FROM chats WHERE username = ? COLLATE NOCASE AND id != ?').get(u, chatId);
+          if (chatExists) throw err(400, 'این شناسه کاربری قبلاً برای کانال دیگری ثبت شده است.');
+          const userExists = db.prepare('SELECT 1 FROM users WHERE username = ? COLLATE NOCASE').get(u);
+          if (userExists) throw err(400, 'این شناسه کاربری متعلق به یک کاربر است.');
+          channelUsername = u;
+        }
+      }
+
+      db.prepare('UPDATE chats SET title = ?, about = ?, username = ?, avatar_file_id = ? WHERE id = ?')
+        .run(title, about || null, channelUsername || null, avatarFileId, chatId);
+
+      if (title !== chat.title && chat.type === 'group') {
+        postServiceMessage(chatId, req.user.id, `«${req.user.display_name}» نام گروه را به «${title}» تغییر داد`);
+      }
+
+      for (const r of db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId)) {
+        sock.emitToUser(r.user_id, 'chat', chatListItem(chatId, r.user_id));
+      }
+      res.json({ chat: chatListItem(chatId, req.user.id) });
+    })
+  );
+
+  // حذف گفتگو: خصوصی برای هر دو طرف؛ گروه/کانال فقط سازنده
+  api.delete(
+    '/chats/:id',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+      if (!chat) throw err(404, 'گفتگو پیدا نشد.');
+      const me = getMembership(chatId, req.user.id);
+      if (!me) throw err(403, 'عضو این گفتگو نیستید.');
+      if (chat.type !== 'private' && me.role !== 'owner') {
+        throw err(403, 'فقط سازنده می‌تواند گفتگو را حذف کند.');
+      }
+
+      const memberIds = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId).map((r) => r.user_id);
+      deleteChatCompletely(chatId);
+      for (const uid of memberIds) sock.emitToUser(uid, 'chat-removed', { chat_id: chatId });
+      res.json({ ok: true });
+    })
+  );
+
+  // پاک کردن تاریخچه پیام‌ها
+  api.delete(
+    '/chats/:id/messages',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+      if (!chat) throw err(404, 'گفتگو پیدا نشد.');
+      const me = getMembership(chatId, req.user.id);
+      if (!me) throw err(403, 'عضو این گفتگو نیستید.');
+      if (chat.type !== 'private' && !isModerator(me)) {
+        throw err(403, 'فقط مدیران می‌توانند تاریخچه را پاک کنند.');
+      }
+
+      const fileIds = db
+        .prepare('SELECT DISTINCT file_id AS fid FROM messages WHERE chat_id = ? AND file_id IS NOT NULL')
+        .all(chatId)
+        .map((r) => r.fid);
+      db.prepare('DELETE FROM messages WHERE chat_id = ?').run(chatId);
+      db.prepare('UPDATE chat_members SET last_read_id = 0 WHERE chat_id = ?').run(chatId);
+      for (const fid of fileIds) cleanupFileIfUnused(fid);
+
+      for (const r of db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId)) {
+        sock.emitToUser(r.user_id, 'chat', chatListItem(chatId, r.user_id));
+      }
+      res.json({ ok: true });
+    })
+  );
+
+  // ترک گروه/کانال — اگر سازنده برود، مدیریت به قدیمی‌ترین مدیر یا عضو می‌رسد
+  api.post(
+    '/chats/:id/leave',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+      if (!chat) throw err(404, 'گفتگو پیدا نشد.');
+      if (chat.type === 'private') throw err(400, 'برای گفتگوی خصوصی از حذف گفتگو استفاده کنید.');
+      const me = getMembership(chatId, req.user.id);
+      if (!me) throw err(403, 'عضو این گفتگو نیستید.');
+
+      const wasOwner = me.role === 'owner';
+      db.prepare('DELETE FROM chat_members WHERE chat_id = ? AND user_id = ?').run(chatId, req.user.id);
+
+      const remaining = db.prepare('SELECT * FROM chat_members WHERE chat_id = ? ORDER BY joined_at, user_id').all(chatId);
+      if (!remaining.length) {
+        deleteChatCompletely(chatId);
+        sock.emitToUser(req.user.id, 'chat-removed', { chat_id: chatId });
+        return res.json({ ok: true, deleted: true });
+      }
+      if (wasOwner) {
+        const next = remaining.find((r) => r.role === 'admin') || remaining[0];
+        db.prepare("UPDATE chat_members SET role = 'owner' WHERE chat_id = ? AND user_id = ?").run(chatId, next.user_id);
+      }
+
+      postServiceMessage(chatId, req.user.id, `«${req.user.display_name}» ${chat.type === 'group' ? 'گروه' : 'کانال'} را ترک کرد`);
+
+      sock.emitToUser(req.user.id, 'chat-removed', { chat_id: chatId });
+      for (const r of db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId)) {
+        sock.emitToUser(r.user_id, 'chat', chatListItem(chatId, r.user_id));
+      }
+      res.json({ ok: true });
+    })
+  );
+
+  // سنجاق/برداشتن سنجاق گفتگو در فهرست خودم
+  api.post(
+    '/chats/:id/pin',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      if (!getMembership(chatId, req.user.id)) throw err(403, 'عضو این گفتگو نیستید.');
+      const pinned = req.body.pinned ? 1 : 0;
+      db.prepare('UPDATE chat_members SET pinned = ? WHERE chat_id = ? AND user_id = ?').run(pinned, chatId, req.user.id);
+      res.json({ ok: true, pinned: !!pinned });
+    })
+  );
+
+  // سنجاق کردن یا برداشتن سنجاق پیام داخل گفتگو
+  api.post(
+    '/chats/:id/pin-message',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+      if (!chat) throw err(404, 'گفتگو پیدا نشد.');
+      const me = getMembership(chatId, req.user.id);
+      if (!me) throw err(403, 'عضو این گفتگو نیستید.');
+      if (['group', 'channel'].includes(chat.type) && !isModerator(me)) {
+        throw err(403, 'فقط مدیران می‌توانند پیام را سنجاق کنند.');
+      }
+
+      const messageId = req.body.message_id ? Number(req.body.message_id) : null;
+      if (messageId) {
+        const m = db.prepare('SELECT id, chat_id FROM messages WHERE id = ?').get(messageId);
+        if (!m || Number(m.chat_id) !== chatId) throw err(400, 'پیام مورد نظر در این گفتگو وجود ندارد.');
+      }
+
+      db.prepare('UPDATE chats SET pinned_message_id = ? WHERE id = ?').run(messageId, chatId);
+
+      const pinnedMsg = messageId ? messagePayload(getMessageFull(messageId), req.user.id) : null;
+      for (const r of db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId)) {
+        sock.emitToUser(r.user_id, 'chat-pin-message', {
+          chat_id: chatId,
+          pinned_message_id: messageId,
+          pinned_message: pinnedMsg,
+        });
+      }
+
+      if (messageId && !chat.is_saved) {
+        postServiceMessage(chatId, req.user.id, `«${req.user.display_name}» یک پیام را سنجاق کرد`);
+      }
+
+      res.json({ ok: true, pinned_message_id: messageId, pinned_message: pinnedMsg });
+    })
+  );
+
+  // بی‌صدا کردن گفتگو
+  api.post(
+    '/chats/:id/mute',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      if (!getMembership(chatId, req.user.id)) throw err(403, 'عضو این گفتگو نیستید.');
+      let minutes = -1;
+      if (req.body.duration_minutes != null) {
+        minutes = Number(req.body.duration_minutes);
+      } else if (req.body.duration_seconds != null) {
+        const secs = Number(req.body.duration_seconds);
+        minutes = secs === -1 ? -1 : secs / 60;
+      }
+      const until = minutes === -1 ? -1 : Date.now() + minutes * 60 * 1000;
+      db.prepare('UPDATE chat_members SET muted_until = ? WHERE chat_id = ? AND user_id = ?').run(until, chatId, req.user.id);
+      res.json({ ok: true, muted_until: until });
+    })
+  );
+
+  // با صدا کردن گفتگو
+  api.post(
+    '/chats/:id/unmute',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      if (!getMembership(chatId, req.user.id)) throw err(403, 'عضو این گفتگو نیستید.');
+      db.prepare('UPDATE chat_members SET muted_until = 0 WHERE chat_id = ? AND user_id = ?').run(chatId, req.user.id);
+      res.json({ ok: true, muted_until: 0 });
+    })
+  );
+
+  // علامت‌گذاری گفتگو به‌عنوان خوانده‌شده
+  api.post(
+    '/chats/:id/read',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      if (!getMembership(chatId, req.user.id)) throw err(403, 'عضو این گفتگو نیستید.');
+      const latest = db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM messages WHERE chat_id = ?').get(chatId).m;
+      db.prepare('UPDATE chat_members SET last_read_id = ? WHERE chat_id = ? AND user_id = ?').run(latest, chatId, req.user.id);
+      const others = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ? AND user_id != ?').all(chatId, req.user.id);
+      for (const o of others) {
+        sock.emitToUser(o.user_id, 'read', { chat_id: chatId, user_id: req.user.id, last_read_id: Number(latest) });
+      }
+      res.json({ ok: true, last_read_id: Number(latest) });
+    })
+  );
+
+  /* ---------------- اعضا و نقش‌ها ---------------- */
+
+  // افزودن عضو به گروه/کانال — فقط مدیران
+  api.post(
+    '/chats/:id/members',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+      if (!chat || chat.type === 'private') throw err(404, 'گفتگو پیدا نشد.');
+      const me = getMembership(chatId, req.user.id);
+      if (!isModerator(me)) throw err(403, 'فقط مدیران می‌توانند عضو اضافه کنند.');
+
+      let ids = [];
+      try {
+        if (Array.isArray(req.body.user_ids)) {
+          ids = req.body.user_ids.map(Number).filter(Boolean);
+        } else if (typeof req.body.user_ids === 'string') {
+          const parsed = JSON.parse(req.body.user_ids);
+          ids = Array.isArray(parsed) ? parsed.map(Number).filter(Boolean) : [];
+        }
+      } catch {
+        ids = [];
+      }
+      ids = [...new Set(ids)];
+      const now = Date.now();
+      const ins = db.prepare("INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)");
+      const added = [];
+      const chatCat = chat.category_id || (getUserById(chat.created_by)?.category_id);
+      for (const id of ids) {
+        const u = getUserById(id);
+        if (!u) throw err(400, 'یکی از کاربران پیدا نشد.');
+        if (!chat.is_official && !req.user.is_special && !u.is_special && u.username !== 'safir') {
+          if (chatCat) {
+            const uCats = getUserCategoryIds(u.id);
+            if (!uCats.includes(Number(chatCat))) {
+              throw err(400, `کاربر «${u.display_name}» به دلیل عدم تطابق دسته‌بندی امکان عضویت در این گفتگو را ندارد.`);
+            }
+          }
+        }
+        if (ins.run(chatId, id, now).changes > 0) added.push(id);
+      }
+
+      for (const id of added) {
+        const u = getUserById(id);
+        if (u) postServiceMessage(chatId, req.user.id, `«${req.user.display_name}»، «${u.display_name}» را به ${chat.type === 'group' ? 'گروه' : 'کانال'} اضافه کرد`);
+      }
+
+      for (const r of db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId)) {
+        sock.emitToUser(r.user_id, 'chat', chatListItem(chatId, r.user_id));
+      }
+      res.json({ ok: true, added: added.length });
+    })
+  );
+
+  // حذف عضو از گروه/کانال — فقط مدیران (مدیر نمی‌تواند مدیر دیگر یا سازنده را حذف کند)
+  api.delete(
+    '/chats/:id/members/:uid',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      const uid = Number(req.params.uid);
+      const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+      if (!chat || chat.type === 'private') throw err(404, 'گفتگو پیدا نشد.');
+      const me = getMembership(chatId, req.user.id);
+      if (!isModerator(me)) throw err(403, 'فقط مدیران می‌توانند عضو حذف کنند.');
+
+      const target = getMembership(chatId, uid);
+      if (!target) throw err(404, 'این کاربر عضو این گفتگو نیست.');
+      if (target.role === 'owner') throw err(403, 'سازنده قابل حذف نیست.');
+      if (me.role === 'admin' && target.role === 'admin') throw err(403, 'مدیر نمی‌تواند مدیر دیگر را حذف کند.');
+
+      const targetUser = getUserById(uid);
+      db.prepare('DELETE FROM chat_members WHERE chat_id = ? AND user_id = ?').run(chatId, uid);
+
+      if (targetUser) {
+        postServiceMessage(chatId, req.user.id, `«${req.user.display_name}»، «${targetUser.display_name}» را از ${chat.type === 'group' ? 'گروه' : 'کانال'} حذف کرد`);
+      }
+
+      sock.emitToUser(uid, 'chat-removed', { chat_id: chatId });
+      for (const r of db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId)) {
+        sock.emitToUser(r.user_id, 'chat', chatListItem(chatId, r.user_id));
+      }
+      res.json({ ok: true });
+    })
+  );
+
+  // تغییر نقش عضو (ارتقا به مدیر / سلب مدیریت)
+  api.put(
+    '/chats/:id/members/:uid',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      const uid = Number(req.params.uid);
+      const role = String(req.body.role || '');
+      if (!['admin', 'member'].includes(role)) throw err(400, 'نقش نامعتبر است.');
+
+      const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+      if (!chat || chat.type === 'private') throw err(404, 'گفتگو پیدا نشد.');
+      const me = getMembership(chatId, req.user.id);
+      if (!isModerator(me)) throw err(403, 'فقط مدیران می‌توانند نقش‌ها را تغییر دهند.');
+
+      const target = getMembership(chatId, uid);
+      if (!target) throw err(404, 'این کاربر عضو این گفتگو نیست.');
+      if (target.role === 'owner') throw err(403, 'نقش سازنده قابل تغییر نیست.');
+      if (uid === req.user.id) throw err(400, 'نمی‌توانید نقش خودتان را تغییر دهید.');
+      if (me.role === 'admin' && (target.role !== 'member' || role !== 'admin')) {
+        throw err(403, 'مدیران فقط می‌توانند اعضای عادی را مدیر کنند.');
+      }
+
+      db.prepare('UPDATE chat_members SET role = ? WHERE chat_id = ? AND user_id = ?').run(role, chatId, uid);
+      for (const r of db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId)) {
+        sock.emitToUser(r.user_id, 'chat', chatListItem(chatId, r.user_id));
+      }
+      res.json({ ok: true });
+    })
+  );
+
+  /* ---------------- پیام‌ها ---------------- */
+
+  api.get(
+    '/chats/:id/messages',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+      if (!chat) throw err(404, 'گفتگو پیدا نشد.');
+      if (!getMembership(chatId, req.user.id)) throw err(403, 'به این گفتگو دسترسی ندارید.');
+
+      if (req.user && req.user.status === 'pending') {
+        const safir = ensureSafirBot();
+        const isSafirChat = db.prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?').get(chatId, safir.id);
+        if (!isSafirChat) {
+          throw err(403, 'حساب شما در انتظار تایید است و فقط مجاز به مشاهده پیام‌های سفیر هستید.');
+        }
+      }
+
+      if (!chat.is_official && (chat.type === 'group' || chat.type === 'channel') && !req.user.is_special) {
+        const chatCatId = chat.category_id || (getUserById(chat.created_by)?.category_id);
+        if (chatCatId) {
+          const uCats = getUserCategoryIds(req.user.id);
+          if (!uCats.includes(Number(chatCatId))) {
+            throw err(403, 'دسترسی به این گفتگو برای دسته‌بندی شما مجاز نیست.');
+          }
+        }
+      }
+
+      const before = req.query.before ? Number(req.query.before) : Number.MAX_SAFE_INTEGER;
+      const limit = Math.min(Number(req.query.limit) || 50, 100);
+      const topicId = req.query.topic_id ? Number(req.query.topic_id) : null;
+
+      let sql = `${MESSAGE_SELECT} WHERE m.chat_id = ? AND m.id < ?`;
+      const params = [chatId, before];
+      if (topicId) {
+        sql += ' AND m.topic_id = ?';
+        params.push(topicId);
+      }
+      sql += ' ORDER BY m.id DESC LIMIT ?';
+      params.push(limit);
+
+      const rows = db.prepare(sql).all(...params);
+      rows.reverse();
+
+      const gRead = db.prepare('SELECT COALESCE(MAX(last_read_id), 0) AS max_read FROM chat_members WHERE chat_id = ? AND user_id != ?').get(chatId, req.user.id);
+      const maxPeerRead = Number(gRead ? gRead.max_read : 0);
+
+      res.json({
+        messages: rows.map((m) => messagePayload(m, req.user.id)),
+        max_peer_read_id: maxPeerRead,
+      });
+    })
+  );
+
+  api.post(
+    '/chats/:id/messages',
+    auth,
+    upload.single('file'),
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+      if (!chat) throw err(404, 'گفتگو پیدا نشد.');
+      const member = getMembership(chatId, req.user.id);
+      if (!member) throw err(403, 'عضو این گفتگو نیستید.');
+      if (req.user.status === 'pending') {
+        throw err(403, 'حساب شما در انتظار تایید ادمین است و امکان ارسال پیام ندارید.');
+      }
+
+      if (!canUserSendMessage(req.user, chat)) {
+        if (chat.type === 'private') {
+          throw err(403, 'امکان ارسال پیام در این گفتگو به دلیل عدم تطابق دسته‌بندی قطع شده است.');
+        } else if (chat.type === 'channel') {
+          throw err(403, 'فقط مدیران می‌توانند در کانال پیام منتشر کنند.');
+        } else {
+          throw err(403, 'امکان ارسال پیام در این گفتگو برای دسته‌بندی شما مجاز نیست.');
+        }
+      }
+
+      if (chat.type === 'private' && !chat.is_saved) {
+        const peer = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ? AND user_id != ?').get(chatId, req.user.id);
+        if (peer && isBlockedBetween(req.user.id, peer.user_id)) {
+          throw err(403, 'ارتباط با این کاربر مسدود است.');
+        }
+      }
+
+      const text = String(req.body.text || '').trim();
+      let fileId = null;
+      if (req.file) fileId = saveFile(req.file, req.user.id);
+      if (!text && !fileId) throw err(400, 'پیام خالی است.');
+      if (text.length > 4000) throw err(400, 'متن پیام خیلی طولانی است.');
+
+      let replyToId = null;
+      if (req.body.reply_to_id && Number(req.body.reply_to_id) > 0) {
+        const r = db.prepare('SELECT id, chat_id FROM messages WHERE id = ?').get(Number(req.body.reply_to_id));
+        if (!r || Number(r.chat_id) !== chatId) throw err(400, 'پیام پاسخ‌شده معتبر نیست.');
+        replyToId = Number(r.id);
+      }
+
+      const isSilent = req.body.is_silent === '1' || req.body.is_silent === 1 || req.body.is_silent === 'true' || req.body.is_silent === true ? 1 : 0;
+      const isVoice = (
+        req.body.is_voice === '1' ||
+        req.body.is_voice === 1 ||
+        req.body.is_voice === 'true' ||
+        req.body.is_voice === true ||
+        (req.file && req.file.mimetype && req.file.mimetype.startsWith('audio/'))
+      ) ? 1 : 0;
+      const topicId = req.body.topic_id ? Number(req.body.topic_id) : null;
+      let scheduledAt = null;
+      if (req.body.scheduled_at) {
+        const raw = req.body.scheduled_at;
+        const n = Number(raw);
+        if (!Number.isNaN(n) && n > 0) {
+          scheduledAt = n;
+        } else {
+          const parsed = Date.parse(raw);
+          if (!Number.isNaN(parsed) && parsed > 0) scheduledAt = parsed;
+        }
+      }
+
+      if (scheduledAt && scheduledAt > Date.now() + 1000) {
+        const schedInfo = db
+          .prepare('INSERT INTO scheduled_messages (chat_id, sender_id, text, file_id, reply_to_id, is_silent, is_voice, topic_id, scheduled_for, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(chatId, req.user.id, text || null, fileId, replyToId, isSilent, isVoice, topicId, scheduledAt, Date.now());
+        return res.json({ scheduled: true, id: Number(schedInfo.lastInsertRowid), scheduled_for: scheduledAt });
+      }
+
+      let linkPreview = null;
+      try {
+        const lp = await fetchLinkPreview(text);
+        if (lp) linkPreview = JSON.stringify(lp);
+      } catch {}
+
+      const info = db
+        .prepare('INSERT INTO messages (chat_id, sender_id, text, file_id, reply_to_id, is_silent, is_voice, topic_id, link_preview, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(chatId, req.user.id, text || null, fileId, replyToId, isSilent, isVoice, topicId, linkPreview, Date.now());
+
+      const msgId = Number(info.lastInsertRowid);
+      db.prepare('UPDATE chat_members SET last_read_id = ? WHERE chat_id = ? AND user_id = ?').run(msgId, chatId, req.user.id);
+
+      const fullMsg = getMessageFull(msgId);
+      const members = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId);
+      for (const m of members) {
+        const p = messagePayload(fullMsg, m.user_id);
+        sock.emitToUser(m.user_id, 'message', p);
+        if (Number(m.user_id) !== Number(req.user.id)) {
+          sock.emitToUser(m.user_id, 'read', { chat_id: chatId, user_id: req.user.id, last_read_id: msgId });
+        }
+      }
+      notifyNewMessage(db, chat, req.user, messagePayload(fullMsg, 0));
+      res.json(messagePayload(fullMsg, req.user.id));
+    })
+  );
+
+  // ویرایش پیام (توسط فرستنده یا مدیران کانال)
+  api.put(
+    '/messages/:id',
+    auth,
+    h(async (req, res) => {
+      const msgId = Number(req.params.id);
+      const msg = getMessageFull(msgId);
+      if (!msg) throw err(404, 'پیام پیدا نشد.');
+      const me = getMembership(msg.chat_id, req.user.id);
+      const isMod = isModerator(me);
+      if (Number(msg.sender_id) !== req.user.id && !(msg.chat_type === 'channel' && isMod)) {
+        throw err(403, 'اجازه ویرایش این پیام را ندارید.');
+      }
+      if (msg.is_service) throw err(400, 'پیام‌های سیستمی قابل ویرایش نیستند.');
+
+      const text = String(req.body.text || '').trim();
+      if (!text && !msg.file_id) throw err(400, 'متن پیام نمی‌تواند خالی باشد.');
+      if (text.length > 4000) throw err(400, 'متن پیام خیلی طولانی است.');
+
+      const now = Date.now();
+      let linkPreview = null;
+      try {
+        const lp = await fetchLinkPreview(text);
+        if (lp) linkPreview = JSON.stringify(lp);
+      } catch {}
+
+      db.prepare('UPDATE messages SET text = ?, edited_at = ?, link_preview = ? WHERE id = ?').run(text, now, linkPreview, msgId);
+
+      const updatedFull = getMessageFull(msgId);
+      const members = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(msg.chat_id);
+      for (const m of members) {
+        const payload = messagePayload(updatedFull, m.user_id);
+        sock.emitToUser(m.user_id, 'message-edited', { chat_id: msg.chat_id, message: payload });
+      }
+      const myPayload = messagePayload(updatedFull, req.user.id);
+      res.json({ ok: true, message: myPayload, ...myPayload });
+    })
+  );
+
+  // لیست پیام‌های زمان‌بندی‌شده کاربر در گفتگو
+  api.get(
+    '/chats/:id/scheduled',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      if (!getMembership(chatId, req.user.id)) throw err(403, 'عضو این گفتگو نیستید.');
+      const rows = db.prepare('SELECT * FROM scheduled_messages WHERE chat_id = ? AND sender_id = ? ORDER BY scheduled_for ASC').all(chatId, req.user.id);
+      res.json({ scheduled: rows });
+    })
+  );
+
+  // لغو ارسال پیام زمان‌بندی‌شده
+  api.delete(
+    '/scheduled/:id',
+    auth,
+    h(async (req, res) => {
+      const id = Number(req.params.id);
+      const row = db.prepare('SELECT * FROM scheduled_messages WHERE id = ?').get(id);
+      if (!row) throw err(404, 'پیام پیدا نشد.');
+      if (row.sender_id !== req.user.id) throw err(403, 'اجازه حذف ندارید.');
+      db.prepare('DELETE FROM scheduled_messages WHERE id = ?').run(id);
+      res.json({ ok: true });
+    })
+  );
+
+  // ایجاد نظرسنجی
+  api.post(
+    '/chats/:id/polls',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+      if (!chat) throw err(404, 'گفتگو پیدا نشد.');
+      const member = getMembership(chatId, req.user.id);
+      if (!member) throw err(403, 'عضو این گفتگو نیستید.');
+      if (chat.type === 'channel' && !isModerator(member)) {
+        throw err(403, 'فقط مدیران می‌توانند در کانال نظرسنجی بگذارند.');
+      }
+
+      const question = String(req.body.question || '').trim();
+      if (!question || question.length > 255) throw err(400, 'صورت سوال نظرسنجی را وارد کنید.');
+
+      let options = Array.isArray(req.body.options) ? req.body.options : [];
+      options = options.map((o) => String(o || '').trim()).filter(Boolean);
+      if (options.length < 2 || options.length > 10) throw err(400, 'تعداد گزینه‌ها باید بین ۲ تا ۱۰ باشد.');
+
+      const isAnonymous = req.body.is_anonymous ? 1 : 0;
+      const allowsMultiple = (req.body.allows_multiple || req.body.is_multiple) ? 1 : 0;
+      const isQuiz = req.body.is_quiz ? 1 : 0;
+      const correctOptionIdx = req.body.correct_option_index != null ? Number(req.body.correct_option_index) : null;
+
+      const now = Date.now();
+      let msgId, pollId;
+      db.exec('BEGIN');
+      try {
+        const msgInfo = db
+          .prepare('INSERT INTO messages (chat_id, sender_id, text, created_at) VALUES (?, ?, ?, ?)')
+          .run(chatId, req.user.id, `📊 ${question}`, now);
+        msgId = Number(msgInfo.lastInsertRowid);
+
+        const pollInfo = db
+          .prepare('INSERT INTO polls (message_id, question, is_anonymous, allows_multiple, is_quiz, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+          .run(msgId, question, isAnonymous, allowsMultiple, isQuiz, now);
+        pollId = Number(pollInfo.lastInsertRowid);
+
+        const insOpt = db.prepare('INSERT INTO poll_options (poll_id, text, position) VALUES (?, ?, ?)');
+        options.forEach((optText, idx) => {
+          const optInfo = insOpt.run(pollId, optText, idx);
+          if (isQuiz && correctOptionIdx === idx) {
+            db.prepare('UPDATE polls SET correct_option_id = ? WHERE id = ?').run(Number(optInfo.lastInsertRowid), pollId);
+          }
+        });
+
+        db.prepare('UPDATE chat_members SET last_read_id = ? WHERE chat_id = ? AND user_id = ?').run(msgId, chatId, req.user.id);
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+
+      const payload = messagePayload(getMessageFull(msgId), req.user.id);
+      const members = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId);
+      for (const m of members) sock.emitToUser(m.user_id, 'message', payload);
+      res.json(payload);
+    })
+  );
+
+  // ثبت یا تغییر رای در نظرسنجی
+  api.post(
+    '/polls/:id/vote',
+    auth,
+    h(async (req, res) => {
+      const pollId = Number(req.params.id);
+      const poll = db.prepare('SELECT p.*, m.chat_id FROM polls p JOIN messages m ON m.id = p.message_id WHERE p.id = ?').get(pollId);
+      if (!poll) throw err(404, 'نظرسنجی پیدا نشد.');
+      if (poll.closed) throw err(400, 'نظرسنجی بسته شده است.');
+
+      const member = getMembership(poll.chat_id, req.user.id);
+      if (!member) throw err(403, 'عضو این گفتگو نیستید.');
+
+      let optionIds = Array.isArray(req.body.option_ids) ? req.body.option_ids.map(Number).filter(Boolean) : [];
+      if (!poll.allows_multiple && optionIds.length > 1) {
+        optionIds = [optionIds[0]];
+      }
+
+      db.exec('BEGIN');
+      try {
+        db.prepare('DELETE FROM poll_votes WHERE poll_id = ? AND user_id = ?').run(pollId, req.user.id);
+        const ins = db.prepare('INSERT INTO poll_votes (poll_id, option_id, user_id, created_at) VALUES (?, ?, ?, ?)');
+        for (const optId of optionIds) {
+          const valid = db.prepare('SELECT 1 FROM poll_options WHERE id = ? AND poll_id = ?').get(optId, pollId);
+          if (valid) ins.run(pollId, optId, req.user.id, Date.now());
+        }
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+
+      const members = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(poll.chat_id);
+      for (const m of members) {
+        sock.emitToUser(m.user_id, 'poll-updated', {
+          message_id: poll.message_id,
+          poll: getPollData(poll.message_id, m.user_id),
+        });
+      }
+      res.json({ ok: true, poll: getPollData(poll.message_id, req.user.id) });
+    })
+  );
+
+  // جستجوی سراسری پیام‌ها در تمام گفتگوهای من
+  api.get(
+    '/search/messages',
+    auth,
+    h(async (req, res) => {
+      const q = String(req.query.q || '').trim();
+      if (!q) return res.json({ messages: [] });
+      const like = `%${q}%`;
+      const rows = db
+        .prepare(`
+          SELECT m.id, m.chat_id, m.text, m.created_at, m.sender_id, u.display_name AS sender_name, u.avatar_file_id,
+                 c.type AS chat_type, c.title AS chat_title, c.is_saved
+          FROM messages m
+          JOIN chat_members cm ON cm.chat_id = m.chat_id AND cm.user_id = ?
+          JOIN chats c ON c.id = m.chat_id
+          JOIN users u ON u.id = m.sender_id
+          WHERE m.is_service = 0 AND m.text LIKE ?
+          ORDER BY m.id DESC LIMIT 50
+        `)
+        .all(req.user.id, like);
+
+      const results = rows.map((r) => {
+        const sender = {
+          id: Number(r.sender_id),
+          display_name: r.sender_name,
+          avatar_url: r.avatar_file_id ? fileUrl(r.avatar_file_id) : null,
+        };
+        return {
+          id: Number(r.id),
+          chat_id: Number(r.chat_id),
+          chat_title: r.is_saved ? 'پیام‌های ذخیره‌شده' : (r.chat_title || r.sender_name),
+          chat_type: r.is_saved ? 'saved' : r.chat_type,
+          sender_id: Number(r.sender_id),
+          sender_name: r.sender_name,
+          sender_avatar_url: sender.avatar_url,
+          sender,
+          text: r.text,
+          created_at: Number(r.created_at),
+        };
+      });
+      res.json({ messages: results });
+    })
+  );
+
+  // دریافت رسانه‌های اشتراک‌گذاشته‌شده در گفتگو (Shared Media)
+  api.get(
+    '/chats/:id/media',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      if (!getMembership(chatId, req.user.id)) throw err(403, 'عضو این گفتگو نیستید.');
+      const type = String(req.query.type || 'photos_videos');
+
+      let rows = [];
+      if (type === 'photos_videos') {
+        rows = db.prepare(`
+          SELECT m.id AS message_id, m.created_at, f.id AS file_id, f.original_name, f.mime_type, f.size
+          FROM messages m
+          JOIN files f ON f.id = m.file_id
+          WHERE m.chat_id = ? AND (f.mime_type LIKE 'image/%' OR f.mime_type LIKE 'video/%')
+          ORDER BY m.id DESC LIMIT 100
+        `).all(chatId);
+      } else if (type === 'files') {
+        rows = db.prepare(`
+          SELECT m.id AS message_id, m.created_at, f.id AS file_id, f.original_name, f.mime_type, f.size
+          FROM messages m
+          JOIN files f ON f.id = m.file_id
+          WHERE m.chat_id = ? AND NOT (f.mime_type LIKE 'image/%' OR f.mime_type LIKE 'video/%' OR f.mime_type LIKE 'audio/%')
+          ORDER BY m.id DESC LIMIT 100
+        `).all(chatId);
+      } else if (type === 'audio') {
+        rows = db.prepare(`
+          SELECT m.id AS message_id, m.created_at, m.is_voice, f.id AS file_id, f.original_name, f.mime_type, f.size
+          FROM messages m
+          JOIN files f ON f.id = m.file_id
+          WHERE m.chat_id = ? AND (f.mime_type LIKE 'audio/%' OR m.is_voice = 1)
+          ORDER BY m.id DESC LIMIT 100
+        `).all(chatId);
+      } else if (type === 'links') {
+        rows = db.prepare(`
+          SELECT m.id AS message_id, m.created_at, m.text, m.link_preview
+          FROM messages m
+          WHERE m.chat_id = ? AND (m.text LIKE '%http://%' OR m.text LIKE '%https://%')
+          ORDER BY m.id DESC LIMIT 100
+        `).all(chatId);
+      }
+
+      const items = rows.map((r) => {
+        const fileObj = r.file_id
+          ? {
+              id: Number(r.file_id),
+              name: r.original_name,
+              original_name: r.original_name,
+              mime: r.mime_type,
+              mime_type: r.mime_type,
+              size: Number(r.size || 0),
+              url: fileUrl(r.file_id),
+            }
+          : null;
+        let linkPreview = null;
+        if (r.link_preview) {
+          try {
+            linkPreview = typeof r.link_preview === 'string' ? JSON.parse(r.link_preview) : r.link_preview;
+          } catch {}
+        }
+        return {
+          ...r,
+          id: Number(r.message_id || r.id),
+          file: fileObj,
+          url: fileObj ? fileObj.url : null,
+          link_preview: linkPreview,
+        };
+      });
+      res.json({ items });
+    })
+  );
+
+  // تاپیک‌ها و گفتگوهای موضوعی (Topics / Forum Mode)
+  api.get(
+    '/chats/:id/topics',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      if (!getMembership(chatId, req.user.id)) throw err(403, 'عضو این گفتگو نیستید.');
+      const topics = db.prepare('SELECT * FROM chat_topics WHERE chat_id = ? ORDER BY id ASC').all(chatId);
+      res.json({ topics });
+    })
+  );
+
+  api.post(
+    '/chats/:id/topics',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+      if (!chat || chat.type !== 'group') throw err(400, 'تاپیک‌ها فقط برای گروه‌ها فعال می‌شوند.');
+      const member = getMembership(chatId, req.user.id);
+      if (!isModerator(member)) throw err(403, 'فقط مدیران می‌توانند تاپیک بسازند.');
+
+      const title = String(req.body.title || '').trim();
+      if (!title || title.length > 50) throw err(400, 'عنوان تاپیک نامعتبر است.');
+      const icon = String(req.body.icon || '💬').trim().slice(0, 4);
+
+      db.prepare('UPDATE chats SET topics_enabled = 1 WHERE id = ?').run(chatId);
+      const info = db
+        .prepare('INSERT INTO chat_topics (chat_id, title, icon, created_by, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run(chatId, title, icon, req.user.id, Date.now());
+      const topicId = Number(info.lastInsertRowid);
+      const topic = db.prepare('SELECT * FROM chat_topics WHERE id = ?').get(topicId);
+
+      postServiceMessage(chatId, req.user.id, `«${req.user.display_name}» تاپیک «${icon} ${title}» را ایجاد کرد`);
+
+      for (const r of db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId)) {
+        sock.emitToUser(r.user_id, 'topic-created', { chat_id: chatId, topic });
+      }
+      res.json({ topic });
+    })
+  );
+
+  // فوروارد یک پیام به گفتگوی دیگر
+  api.post(
+    '/chats/:id/forward',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+      if (!chat) throw err(404, 'گفتگو پیدا نشد.');
+      const member = getMembership(chatId, req.user.id);
+      if (!member) throw err(403, 'عضو این گفتگو نیستید.');
+      if (chat.type === 'channel' && !isModerator(member)) {
+        throw err(403, 'فقط مدیران می‌توانند در کانال پیام منتشر کنند.');
+      }
+
+      const src = getMessageFull(Number(req.body.message_id));
+      if (!src) throw err(404, 'پیام اصلی پیدا نشد.');
+      if (!getMembership(src.chat_id, req.user.id)) throw err(403, 'به پیام اصلی دسترسی ندارید.');
+
+      const forwardFromId = src.forward_from_id || src.sender_id;
+      const forwardFromName = src.forward_from_name || src.sender_display_name;
+
+      const info = db
+        .prepare('INSERT INTO messages (chat_id, sender_id, text, file_id, forward_from_id, forward_from_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(chatId, req.user.id, src.text, src.file_id, forwardFromId, forwardFromName, Date.now());
+
+      const fwdMsgId = Number(info.lastInsertRowid);
+      db.prepare('UPDATE chat_members SET last_read_id = ? WHERE chat_id = ? AND user_id = ?').run(fwdMsgId, chatId, req.user.id);
+
+      const fullFwd = getMessageFull(fwdMsgId);
+      const members = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId);
+      for (const m of members) sock.emitToUser(m.user_id, 'message', messagePayload(fullFwd, m.user_id));
+      notifyNewMessage(db, chat, req.user, messagePayload(fullFwd, 0));
+      res.json(messagePayload(fullFwd, req.user.id));
+    })
+  );
+
+  // حذف پیام — فرستنده، یا مدیران در گروه/کانال
+  api.delete(
+    '/messages/:id',
+    auth,
+    h(async (req, res) => {
+      const msg = getMessageFull(Number(req.params.id));
+      if (!msg) throw err(404, 'پیام پیدا نشد.');
+      const me = getMembership(msg.chat_id, req.user.id);
+      if (!me) throw err(403, 'به این گفتگو دسترسی ندارید.');
+      if (Number(msg.sender_id) !== req.user.id && !isModerator(me)) {
+        throw err(403, 'اجازه حذف این پیام را ندارید.');
+      }
+
+      db.prepare('DELETE FROM messages WHERE id = ?').run(Number(msg.id));
+      if (msg.file_id) cleanupFileIfUnused(msg.file_id);
+
+      const memberIds = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(msg.chat_id).map((r) => r.user_id);
+      for (const uid of memberIds) {
+        sock.emitToUser(uid, 'message-deleted', { chat_id: Number(msg.chat_id), message_id: Number(msg.id) });
+        sock.emitToUser(uid, 'chat', chatListItem(msg.chat_id, uid));
+      }
+      res.json({ ok: true });
+    })
+  );
+
+  // ثبت یا تغییر ری‌اکشن به پیام (تلگرامی)
+  api.post(
+    '/messages/:id/reactions',
+    auth,
+    h(async (req, res) => {
+      const msgId = Number(req.params.id);
+      const msg = db.prepare('SELECT id, chat_id FROM messages WHERE id = ?').get(msgId);
+      if (!msg) throw err(404, 'پیام پیدا نشد.');
+      const me = getMembership(msg.chat_id, req.user.id);
+      if (!me) throw err(403, 'به این گفتگو دسترسی ندارید.');
+
+      const emoji = String(req.body.emoji || '').trim();
+      const ALLOWED = ['👍', '❤️', '😂', '🔥', '👏', '😢', '🎉'];
+      if (!ALLOWED.includes(emoji)) throw err(400, 'ایموجی نامعتبر است.');
+
+      const existing = db.prepare('SELECT emoji FROM message_reactions WHERE message_id = ? AND user_id = ?').get(msgId, req.user.id);
+      if (existing && existing.emoji === emoji) {
+        db.prepare('DELETE FROM message_reactions WHERE message_id = ? AND user_id = ?').run(msgId, req.user.id);
+      } else {
+        db.prepare(`
+          INSERT INTO message_reactions (message_id, user_id, emoji, created_at)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(message_id, user_id) DO UPDATE SET emoji = excluded.emoji, created_at = excluded.created_at
+        `).run(msgId, req.user.id, emoji, Date.now());
+      }
+
+      const reactions = getMessageReactions(msgId, req.user.id);
+      const members = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(msg.chat_id);
+      for (const m of members) {
+        sock.emitToUser(m.user_id, 'message-reactions', {
+          chat_id: Number(msg.chat_id),
+          message_id: msgId,
+          reactions: getMessageReactions(msgId, m.user_id),
+        });
+      }
+      res.json({ ok: true, reactions });
+    })
+  );
+
+  // پیش‌نمایش گفتگو با لینک دعوت یا شناسه کانال
+  api.get(
+    '/chats/join/:code',
+    auth,
+    h(async (req, res) => {
+      const code = String(req.params.code || '').trim().replace(/^@/, '');
+      const chat = db
+        .prepare("SELECT * FROM chats WHERE invite_code = ? OR (type = 'channel' AND username = ? COLLATE NOCASE)")
+        .get(code, code);
+      if (!chat) throw err(404, 'گفتگو، کانال یا لینک دعوت پیدا نشد.');
+      if (!chat.is_official && !req.user.is_special) {
+        const chatCatId = chat.category_id || (getUserById(chat.created_by)?.category_id);
+        if (chatCatId && !getUserCategoryIds(req.user.id).includes(Number(chatCatId))) {
+          throw err(403, 'این گفتگو متعلق به دسته‌بندی دیگری است و امکان عضویت ندارید.');
+        }
+      }
+      const member = getMembership(chat.id, req.user.id);
+      res.json({
+        id: Number(chat.id),
+        type: chat.type,
+        username: chat.username || null,
+        title: chat.title,
+        about: chat.about,
+        avatar_url: fileUrl(chat.avatar_file_id),
+        member_count: chatMemberCount(chat.id),
+        already_member: !!member,
+      });
+    })
+  );
+
+  // پیوستن به گروه یا کانال با لینک دعوت یا شناسه کانال
+  api.post(
+    '/chats/join/:code',
+    auth,
+    requireApproved,
+    h(async (req, res) => {
+      const code = String(req.params.code || '').trim().replace(/^@/, '');
+      const chat = db
+        .prepare("SELECT * FROM chats WHERE invite_code = ? OR (type = 'channel' AND username = ? COLLATE NOCASE)")
+        .get(code, code);
+      if (!chat) throw err(404, 'گفتگو، کانال یا لینک دعوت پیدا نشد.');
+      if (!chat.is_official && !req.user.is_special) {
+        const chatCatId = chat.category_id || (getUserById(chat.created_by)?.category_id);
+        if (chatCatId && !getUserCategoryIds(req.user.id).includes(Number(chatCatId))) {
+          throw err(403, 'این گفتگو متعلق به دسته‌بندی دیگری است و امکان عضویت ندارید.');
+        }
+      }
+      const member = getMembership(chat.id, req.user.id);
+      if (member) {
+        return res.json({ already_member: true, chat_id: chat.id, chat: chatListItem(chat.id, req.user.id) });
+      }
+
+      const now = Date.now();
+      db.prepare("INSERT INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)").run(chat.id, req.user.id, now);
+
+      if (chat.type === 'group') {
+        postServiceMessage(chat.id, req.user.id, `«${req.user.display_name}» با لینک دعوت به گروه پیوست`);
+      }
+
+      const userChat = chatListItem(chat.id, req.user.id);
+      sock.emitToUser(req.user.id, 'chat', userChat);
+      for (const r of db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ? AND user_id != ?').all(chat.id, req.user.id)) {
+        sock.emitToUser(r.user_id, 'chat', chatListItem(chat.id, r.user_id));
+      }
+      res.json({ already_member: false, chat_id: chat.id, chat: userChat });
+    })
+  );
+
+  // باطل کردن و ساخت مجدد لینک دعوت (فقط مدیران)
+  api.post(
+    '/chats/:id/invite-link/revoke',
+    auth,
+    h(async (req, res) => {
+      const chatId = Number(req.params.id);
+      const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+      if (!chat || chat.type === 'private') throw err(404, 'گفتگو پیدا نشد.');
+      const me = getMembership(chatId, req.user.id);
+      if (!isModerator(me)) throw err(403, 'فقط مدیران می‌توانند لینک دعوت را بازنشانی کنند.');
+
+      const newCode = crypto.randomBytes(8).toString('hex');
+      db.prepare('UPDATE chats SET invite_code = ? WHERE id = ?').run(newCode, chatId);
+      for (const r of db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId)) {
+        sock.emitToUser(r.user_id, 'chat', chatListItem(chatId, r.user_id));
+      }
+      res.json({ ok: true, invite_code: newCode });
+    })
+  );
+
+  /* ---------------- فایل‌ها ---------------- */
+
+  api.get(
+    '/files/:id',
+    auth,
+    h(async (req, res) => {
+      const f = db.prepare('SELECT * FROM files WHERE id = ?').get(Number(req.params.id));
+      if (!f) throw err(404, 'فایل پیدا نشد.');
+      const p = path.join(UPLOAD_DIR, f.stored_name);
+      if (!fs.existsSync(p)) throw err(404, 'فایل پیدا نشد.');
+
+      const stat = fs.statSync(p);
+      const totalSize = stat.size;
+      const range = req.headers.range;
+
+      res.setHeader('Content-Type', f.mime_type || 'application/octet-stream');
+      res.setHeader('Accept-Ranges', 'bytes');
+      const disp = req.query.download ? 'attachment' : 'inline';
+      res.setHeader('Content-Disposition', `${disp}; filename*=UTF-8''${encodeURIComponent(f.original_name)}`);
+
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+
+        if (isNaN(start) || start >= totalSize || (parts[1] && end >= totalSize) || start > end) {
+          res.setHeader('Content-Range', `bytes */${totalSize}`);
+          return res.status(416).end();
+        }
+
+        const chunkSize = end - start + 1;
+        res.status(206);
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+        res.setHeader('Content-Length', chunkSize);
+
+        const stream = fs.createReadStream(p, { start, end });
+        stream.pipe(res);
+        req.on('close', () => stream.destroy());
+      } else {
+        res.setHeader('Content-Length', totalSize);
+        const stream = fs.createReadStream(p);
+        stream.pipe(res);
+        req.on('close', () => stream.destroy());
+      }
+    })
+  );
+
+  /* ---------------- پنل مدیریت (Admin Panel API) ---------------- */
+
+  function adminAuth(req, res, next) {
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : req.query.admin_token || '';
+    if (!token) return next(err(401, 'دسترسی غیرمجاز. لطفاً وارد پنل مدیریت شوید.'));
+    const session = db
+      .prepare('SELECT a.*, s.token AS session_token FROM admin_sessions s JOIN admins a ON a.id = s.admin_id WHERE s.token = ?')
+      .get(token);
+    if (!session) return next(err(401, 'نشست ادمین نامعتبر یا منقضی شده است.'));
+    req.admin = session;
+    next();
+  }
+
+  // بررسی وضعیت راه‌اندازی پنل ادمین
+  api.get('/admin/status', h(async (req, res) => {
+    const count = db.prepare('SELECT COUNT(*) AS c FROM admins').get().c;
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : req.query.admin_token || '';
+    let currentAdmin = null;
+    if (token) {
+      const s = db.prepare('SELECT a.id, a.username FROM admin_sessions s JOIN admins a ON a.id = s.admin_id WHERE s.token = ?').get(token);
+      if (s) currentAdmin = { id: Number(s.id), username: s.username };
+    }
+    res.json({
+      initialized: count > 0,
+      logged_in: !!currentAdmin,
+      admin: currentAdmin,
+    });
+  }));
+
+  // راه‌اندازی اولیه (ایجاد اولین ادمین)
+  api.post('/admin/setup', h(async (req, res) => {
+    const count = db.prepare('SELECT COUNT(*) AS c FROM admins').get().c;
+    if (count > 0) throw err(400, 'پنل ادمین قبلاً راه‌اندازی شده است.');
+    const username = String(req.body.username || '').trim();
+    const password = String(req.body.password || '');
+    if (!username || username.length < 3) throw err(400, 'نام کاربری ادمین باید حداقل ۳ کاراکتر باشد.');
+    if (!password || password.length < 6) throw err(400, 'رمز عبور ادمین باید حداقل ۶ کاراکتر باشد.');
+
+    const now = Date.now();
+    const recoveryKey = generateRecoveryKey(10000);
+    const info = db.prepare('INSERT INTO admins (username, password_hash, recovery_key, created_at) VALUES (?, ?, ?, ?)').run(username, hashPassword(password), recoveryKey, now);
+    const adminId = Number(info.lastInsertRowid);
+    const token = newToken();
+    db.prepare('INSERT INTO admin_sessions (token, admin_id, created_at) VALUES (?, ?, ?)').run(token, adminId, now);
+    res.json({ ok: true, token, admin: { id: adminId, username }, recovery_key: recoveryKey });
+  }));
+
+  // دانلود فایل کلید بازیابی ادمین (.txt)
+  api.get('/admin/recovery-key/download', adminAuth, h(async (req, res) => {
+    const a = db.prepare('SELECT recovery_key FROM admins WHERE id = ?').get(req.admin.id);
+    let key = a ? a.recovery_key : null;
+    if (!key) {
+      key = generateRecoveryKey(10000);
+      db.prepare('UPDATE admins SET recovery_key = ? WHERE id = ?').run(key, req.admin.id);
+    }
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="ghasemgram-admin-recovery-key.txt"');
+    res.send(key);
+  }));
+
+  // تولید مجدد کلید بازیابی ادمین
+  api.post('/admin/recovery-key/regenerate', adminAuth, h(async (req, res) => {
+    const newKey = generateRecoveryKey(10000);
+    db.prepare('UPDATE admins SET recovery_key = ? WHERE id = ?').run(newKey, req.admin.id);
+    res.json({ ok: true, message: 'فایل کلید بازیابی با موفقیت ریست شد. لطفاً فایل جدید را دانلود و نگهداری کنید.', key: newKey });
+  }));
+
+  // بازنشانی نام کاربری و رمز عبور ادمین فقط با آپلود فایل txt کلید بازیابی
+  api.post('/admin/recovery-reset', upload.single('key_file'), h(async (req, res) => {
+    let uploadedKey = '';
+    if (req.file) {
+      try {
+        uploadedKey = fs.readFileSync(req.file.path, 'utf8').trim();
+        fs.unlinkSync(req.file.path);
+      } catch (e) {
+        console.error('Failed to read key file:', e);
+      }
+    } else if (req.body.key) {
+      uploadedKey = String(req.body.key).trim();
+    }
+    if (!uploadedKey) throw err(400, 'لطفاً فایل کلید بازیابی (.txt) را بارگذاری نمایید.');
+
+    const a = db.prepare('SELECT id, username, recovery_key FROM admins LIMIT 1').get();
+    if (!a || !a.recovery_key) throw err(400, 'حساب مدیریتی یافت نشد.');
+
+    // بررسی دقیق کلید بازیابی
+    if (uploadedKey !== a.recovery_key.trim()) {
+      throw err(403, 'محتوای فایل کلید بازیابی نامعتبر است! احراز هویت ادمین تایید نشد.');
+    }
+
+    const newUsername = String(req.body.new_username || a.username).trim();
+    const newPassword = String(req.body.new_password || '');
+    if (newUsername.length < 3) throw err(400, 'نام کاربری باید حداقل ۳ کاراکتر باشد.');
+    if (!newPassword || newPassword.length < 6) throw err(400, 'رمز عبور جدید باید حداقل ۶ کاراکتر باشد.');
+
+    const newHash = hashPassword(newPassword);
+    const newKey = generateRecoveryKey(10000);
+    db.prepare('UPDATE admins SET username = ?, password_hash = ?, recovery_key = ? WHERE id = ?')
+      .run(newUsername, newHash, newKey, a.id);
+    db.exec('DELETE FROM admin_sessions');
+
+    res.json({
+      ok: true,
+      message: 'اطلاعات ادمین با موفقیت بازنشانی شد. اکنون می‌توانید با نام کاربری و رمز عبور جدید وارد شوید.',
+      new_recovery_key: newKey,
+    });
+  }));
+
+  // ورود ادمین
+  api.post('/admin/login', h(async (req, res) => {
+    const username = String(req.body.username || '').trim();
+    const password = String(req.body.password || '');
+    const a = db.prepare('SELECT * FROM admins WHERE username = ?').get(username);
+    if (!a || !verifyPassword(password, a.password_hash)) {
+      throw err(401, 'نام کاربری یا رمز عبور ادمین نادرست است.');
+    }
+    const token = newToken();
+    db.prepare('INSERT INTO admin_sessions (token, admin_id, created_at) VALUES (?, ?, ?)').run(token, a.id, Date.now());
+    res.json({ ok: true, token, admin: { id: Number(a.id), username: a.username } });
+  }));
+
+  // خروج ادمین
+  api.post('/admin/logout', adminAuth, h(async (req, res) => {
+    db.prepare('DELETE FROM admin_sessions WHERE token = ?').run(req.admin.session_token);
+    res.json({ ok: true });
+  }));
+
+  // مشخصات ادمین فعلی
+  api.get('/admin/me', adminAuth, h(async (req, res) => {
+    res.json({ admin: { id: Number(req.admin.id), username: req.admin.username } });
+  }));
+
+  // تغییر نام کاربری و رمز عبور ادمین
+  api.put('/admin/credentials', adminAuth, h(async (req, res) => {
+    const currentPass = String(req.body.current_password || '');
+    if (!verifyPassword(currentPass, req.admin.password_hash)) {
+      throw err(400, 'رمز عبور فعلی ادمین نادرست است.');
+    }
+    const newUsername = req.body.new_username ? String(req.body.new_username).trim() : req.admin.username;
+    if (newUsername.length < 3) throw err(400, 'نام کاربری باید حداقل ۳ کاراکتر باشد.');
+
+    if (newUsername.toLowerCase() !== req.admin.username.toLowerCase()) {
+      const exists = db.prepare('SELECT id FROM admins WHERE username = ? AND id != ?').get(newUsername, req.admin.id);
+      if (exists) throw err(409, 'این نام کاربری قبلاً استفاده شده است.');
+    }
+
+    let newHash = req.admin.password_hash;
+    if (req.body.new_password) {
+      const newPass = String(req.body.new_password);
+      if (newPass.length < 6) throw err(400, 'رمز عبور جدید باید حداقل ۶ کاراکتر باشد.');
+      newHash = hashPassword(newPass);
+    }
+
+    db.prepare('UPDATE admins SET username = ?, password_hash = ? WHERE id = ?').run(newUsername, newHash, req.admin.id);
+    res.json({ ok: true, admin: { id: Number(req.admin.id), username: newUsername } });
+  }));
+
+  /* ---------------- مدیریت سفیر ---------------- */
+
+  // دریافت اطلاعات سفیر
+  api.get('/admin/safir', adminAuth, h(async (req, res) => {
+    const safir = ensureSafirBot();
+    res.json({
+      safir: {
+        id: Number(safir.id),
+        username: safir.username,
+        display_name: safir.display_name,
+        avatar_url: fileUrl(safir.avatar_file_id),
+        bio: safir.bio || '',
+      },
+    });
+  }));
+
+  // ویرایش مشخصات سفیر (نام، پروفایل، بیو)
+  api.put(
+    '/admin/safir',
+    adminAuth,
+    upload.single('avatar'),
+    h(async (req, res) => {
+      const safir = ensureSafirBot();
+      const displayName = req.body.display_name ? String(req.body.display_name).trim() : safir.display_name;
+      const bio = req.body.bio !== undefined ? String(req.body.bio).trim() : safir.bio;
+      let avatarFileId = safir.avatar_file_id;
+      if (req.file) {
+        avatarFileId = saveFile(req.file, null);
+      }
+
+      db.prepare('UPDATE users SET display_name = ?, bio = ?, avatar_file_id = ? WHERE id = ?')
+        .run(displayName, bio, avatarFileId, safir.id);
+      const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(safir.id);
+
+      // اطلاع‌رسانی به چت‌های فعال برای به‌روزرسانی پروفایل سفیر
+      sock.emitToUser(safir.id, 'presence', { user_id: safir.id, online: true });
+
+      res.json({
+        ok: true,
+        safir: {
+          id: Number(updated.id),
+          username: updated.username,
+          display_name: updated.display_name,
+          avatar_url: fileUrl(updated.avatar_file_id),
+          bio: updated.bio,
+        },
+      });
+    })
+  );
+
+  // ارسال پیام همگانی توسط سفیر به همه کاربران
+  api.post('/admin/safir/broadcast', adminAuth, h(async (req, res) => {
+    const text = String(req.body.text || '').trim();
+    if (!text) throw err(400, 'متن پیام همگانی را وارد کنید.');
+    const users = db.prepare("SELECT id FROM users WHERE username != 'safir'").all();
+    let sentCount = 0;
+    for (const u of users) {
+      try {
+        sendSafirBotMessage(u.id, text);
+        sentCount++;
+      } catch {}
+    }
+    res.json({ ok: true, sent_count: sentCount, message: `پیام همگانی با موفقیت برای ${sentCount} کاربر ارسال شد.` });
+  }));
+
+  // ارسال پیام سفیر به یک کاربر خاص
+  api.post('/admin/safir/message', adminAuth, h(async (req, res) => {
+    const targetId = Number(req.body.user_id);
+    const text = String(req.body.text || '').trim();
+    if (!targetId) throw err(400, 'کاربر انتخاب نشده است.');
+    if (!text) throw err(400, 'متن پیام را وارد کنید.');
+    const u = getUserById(targetId);
+    if (!u) throw err(404, 'کاربر پیدا نشد.');
+    sendSafirBotMessage(targetId, text);
+    res.json({ ok: true, message: `پیام سفیر با موفقیت برای «${u.display_name}» ارسال شد.` });
+  }));
+
+  /* ---------------- مدیریت کاربران و دسته‌بندی‌ها ---------------- */
+
+  // لیست کاربران (با قابلیت جستجو و فیلتر)
+  api.get('/admin/users', adminAuth, h(async (req, res) => {
+    const q = String(req.query.q || '').trim().toLowerCase();
+    let sql = `
+      SELECT u.id, u.username, u.display_name, u.avatar_file_id, u.status, u.banned_until, u.created_at, u.last_seen_at, u.category_id, u.is_special
+      FROM users u
+      WHERE u.username != 'safir'
+    `;
+    const params = [];
+    if (q) {
+      sql += " AND (LOWER(u.username) LIKE ? OR LOWER(u.display_name) LIKE ?)";
+      params.push(`%${q}%`, `%${q}%`);
+    }
+    sql += " ORDER BY u.created_at DESC";
+    const allRows = db.prepare(sql).all(...params);
+
+    const now = Date.now();
+    const users = allRows.map((u) => {
+      let status = u.status;
+      if (status === 'temp_banned' && u.banned_until && now >= Number(u.banned_until)) {
+        db.prepare("UPDATE users SET status = 'approved', banned_until = NULL WHERE id = ?").run(u.id);
+        status = 'approved';
+      }
+      const catList = getUserCategories(u.id);
+      const catIds = catList.map(c => c.id);
+      const catNames = catList.map(c => c.name).join('، ');
+      return {
+        id: Number(u.id),
+        username: u.username,
+        display_name: u.display_name,
+        avatar_url: fileUrl(u.avatar_file_id),
+        status,
+        category_id: catIds.length > 0 ? catIds[0] : (u.category_id ? Number(u.category_id) : null),
+        category_ids: catIds,
+        category_name: catNames || null,
+        categories: catList,
+        is_special: !!u.is_special,
+        banned_until: u.banned_until ? Number(u.banned_until) : null,
+        banned_remaining: status === 'temp_banned' && u.banned_until && Number(u.banned_until) > now
+          ? formatRemainingBanTime(Number(u.banned_until) - now)
+          : null,
+        created_at: Number(u.created_at),
+        last_seen_at: u.last_seen_at ? Number(u.last_seen_at) : null,
+      };
+    });
+
+    const pending = users.filter((u) => u.status === 'pending');
+    const approved = users.filter((u) => u.status === 'approved');
+    const banned = users.filter((u) => u.status === 'banned' || u.status === 'temp_banned');
+
+    res.json({
+      users,
+      pending,
+      approved,
+      banned,
+      stats: {
+        total_users: users.length,
+        pending_count: pending.length,
+        approved_count: approved.length,
+        banned_count: banned.length,
+      },
+    });
+  }));
+
+  // تایید کاربر توسط ادمین به همراه انتخاب یک یا چند دسته‌بندی
+  api.post('/admin/users/:id/approve', adminAuth, h(async (req, res) => {
+    const targetId = Number(req.params.id);
+    const u = getUserById(targetId);
+    if (!u) throw err(404, 'کاربر پیدا نشد.');
+    if (u.username === 'safir') throw err(400, 'ربات سفیر قابل ویرایش نیست.');
+
+    let catIds = [];
+    if (Array.isArray(req.body.category_ids) && req.body.category_ids.length > 0) {
+      catIds = req.body.category_ids.map(Number).filter(n => Number.isInteger(n) && n > 0);
+    } else if (req.body.category_id) {
+      catIds = [Number(req.body.category_id)];
+    }
+
+    if (catIds.length === 0) {
+      const existingCats = getUserCategoryIds(targetId);
+      if (existingCats.length > 0) {
+        catIds = existingCats;
+      } else {
+        const firstCat = db.prepare('SELECT id FROM categories ORDER BY id ASC LIMIT 1').get();
+        if (firstCat) catIds = [firstCat.id];
+      }
+    }
+    if (catIds.length === 0) throw err(400, 'ابتدا باید حداقل یک دسته‌بندی تعریف شود.');
+
+    const placeholders = catIds.map(() => '?').join(',');
+    const validCats = db.prepare(`SELECT id, name FROM categories WHERE id IN (${placeholders})`).all(...catIds);
+    if (validCats.length === 0) throw err(400, 'دسته‌بندی‌های انتخاب شده معتبر نیستند.');
+    const validCatIds = validCats.map(c => c.id);
+
+    setUserCategories(targetId, validCatIds);
+    db.prepare("UPDATE users SET status = 'approved', category_id = ?, banned_until = NULL WHERE id = ?").run(validCatIds[0], targetId);
+
+    // عضویت خودکار در کانال رسمی قاسم‌گرام
+    const official = ensureOfficialChannel();
+    if (official) {
+      db.prepare("INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)").run(official.id, targetId, Date.now());
+      sock.emitToUser(targetId, 'chat', chatListItem(official.id, targetId));
+    }
+
+    const catNames = validCats.map(c => c.name).join('، ');
+    // ربات سفیر پیام تایید را ارسال می‌کند
+    sendSafirBotMessage(targetId, `ادمین حساب شما را در دسته‌بندی «${catNames}» تایید کرد. به پیام‌رسان قاسم‌گرام خوش آمدید!`);
+
+    // ارسال رویداد زنده به سوکت کاربر برای فعال‌سازی آنی تمام امکانات
+    sock.emitToUser(targetId, 'user-status-changed', {
+      status: 'approved',
+      category_id: validCatIds[0],
+      category_ids: validCatIds
+    });
+
+    // ایجاد چت خصوصی با تمامی اعضای این دسته‌بندی‌ها تا در لیست چت‌ها ظاهر شوند
+    for (const cid of validCatIds) {
+      ensureCategoryPrivateChats(targetId, cid);
+    }
+
+    res.json({ ok: true, message: `کاربر با موفقیت در دسته‌بندی «${catNames}» تایید شد.` });
+  }));
+
+  // تغییر دسته‌بندی‌های یک کاربر توسط ادمین
+  api.put(['/admin/users/:id/category', '/admin/users/:id/categories'], adminAuth, h(async (req, res) => {
+    const targetId = Number(req.params.id);
+    const u = getUserById(targetId);
+    if (!u) throw err(404, 'کاربر پیدا نشد.');
+    if (u.username === 'safir') throw err(400, 'ربات سفیر قابل ویرایش نیست.');
+
+    let newCatIds = [];
+    if (Array.isArray(req.body.category_ids)) {
+      newCatIds = req.body.category_ids.map(Number).filter(n => Number.isInteger(n) && n > 0);
+    } else if (req.body.category_id != null) {
+      newCatIds = [Number(req.body.category_id)];
+    }
+    if (newCatIds.length === 0) throw err(400, 'حداقل یک دسته‌بندی باید انتخاب شود.');
+
+    const placeholders = newCatIds.map(() => '?').join(',');
+    const validCats = db.prepare(`SELECT id, name FROM categories WHERE id IN (${placeholders})`).all(...newCatIds);
+    if (validCats.length === 0) throw err(400, 'دسته‌بندی‌های انتخاب شده معتبر نیستند.');
+    const validCatIds = validCats.map(c => c.id);
+
+    setUserCategories(targetId, validCatIds);
+    db.prepare('UPDATE users SET category_id = ? WHERE id = ?').run(validCatIds[0], targetId);
+
+    // ارسال رویداد تغییر دسته‌بندی به کاربر
+    sock.emitToUser(targetId, 'user-category-changed', {
+      category_id: validCatIds[0],
+      category_ids: validCatIds
+    });
+
+    // ایجاد و اتصال چت‌های خصوصی اعضای دسته‌بندی‌های جدید
+    for (const cid of validCatIds) {
+      ensureCategoryPrivateChats(targetId, cid);
+    }
+
+    // به‌روزرسانی وضعیت ارسال پیام (can_send) برای تمامی چت‌های خصوصی کاربر با طرف‌های مقابل
+    const privateChats = db.prepare(`
+      SELECT cm1.chat_id, cm2.user_id AS peer_id
+      FROM chat_members cm1
+      JOIN chats c ON c.id = cm1.chat_id AND c.type = 'private' AND c.is_saved = 0
+      JOIN chat_members cm2 ON cm2.chat_id = cm1.chat_id AND cm2.user_id != ?
+      WHERE cm1.user_id = ?
+    `).all(targetId, targetId);
+
+    for (const pc of privateChats) {
+      const itemTarget = chatListItem(pc.chat_id, targetId);
+      if (itemTarget) sock.emitToUser(targetId, 'chat', itemTarget);
+      const itemPeer = chatListItem(pc.chat_id, pc.peer_id);
+      if (itemPeer) sock.emitToUser(pc.peer_id, 'chat', itemPeer);
+    }
+
+    const catNames = validCats.map(c => c.name).join('، ');
+    res.json({ ok: true, message: `دسته‌بندی‌های کاربر به «${catNames}» تغییر یافت و دسترسی‌ها به‌روز شدند.` });
+  }));
+
+  /* ---------------- API های دسته‌بندی‌ها ---------------- */
+
+  api.post('/admin/categories/sync-chats', adminAuth, h(async (req, res) => {
+    syncAllCategoryPrivateChats();
+    res.json({ ok: true, message: 'چت‌های تمام اعضای دسته‌بندی‌ها با موفقیت همگام‌سازی شدند.' });
+  }));
+
+  api.get('/admin/categories', adminAuth, h(async (req, res) => {
+    const list = db.prepare(`
+      SELECT c.id, c.name, c.description, c.created_at,
+        (SELECT COUNT(DISTINCT uc.user_id) FROM user_categories uc JOIN users u ON u.id = uc.user_id WHERE uc.category_id = c.id AND u.status = 'approved') AS user_count,
+        (SELECT COUNT(*) FROM chats ch WHERE ch.category_id = c.id AND ch.type IN ('group', 'channel') AND ch.is_official = 0) AS chat_count
+      FROM categories c
+      ORDER BY c.id ASC
+    `).all();
+    res.json({ categories: list });
+  }));
+
+  // دریافت لیست کاربران یک دسته‌بندی خاص برای مشاهده در پنل ادمین
+  api.get('/admin/categories/:id/users', adminAuth, h(async (req, res) => {
+    const catId = Number(req.params.id);
+    const cat = db.prepare('SELECT id, name, description FROM categories WHERE id = ?').get(catId);
+    if (!cat) throw err(404, 'دسته‌بندی پیدا نشد.');
+
+    const users = db.prepare(`
+      SELECT u.id, u.username, u.display_name, u.avatar_file_id, u.status, u.is_special, u.banned_until, u.created_at, u.last_seen_at
+      FROM users u
+      JOIN user_categories uc ON uc.user_id = u.id
+      WHERE uc.category_id = ? AND u.username != 'safir'
+      ORDER BY u.display_name ASC
+    `).all(catId);
+
+    const now = Date.now();
+    res.json({
+      category: cat,
+      users: users.map(u => {
+        let status = u.status;
+        if (status === 'temp_banned' && u.banned_until && now >= Number(u.banned_until)) {
+          db.prepare("UPDATE users SET status = 'approved', banned_until = NULL WHERE id = ?").run(u.id);
+          status = 'approved';
+        }
+        const catList = getUserCategories(u.id);
+        return {
+          id: Number(u.id),
+          username: u.username,
+          display_name: u.display_name,
+          avatar_url: fileUrl(u.avatar_file_id),
+          status,
+          is_special: !!u.is_special,
+          category_ids: catList.map(c => c.id),
+          categories: catList,
+          category_name: catList.map(c => c.name).join('، '),
+          banned_until: u.banned_until ? Number(u.banned_until) : null,
+          created_at: Number(u.created_at),
+          last_seen_at: u.last_seen_at ? Number(u.last_seen_at) : null,
+        };
+      })
+    });
+  }));
+
+  api.post('/admin/categories', adminAuth, h(async (req, res) => {
+    const name = String(req.body.name || '').trim();
+    const description = String(req.body.description || '').trim();
+    if (!name) throw err(400, 'نام دسته‌بندی الزامی است.');
+    const existing = db.prepare('SELECT id FROM categories WHERE name = ? COLLATE NOCASE').get(name);
+    if (existing) throw err(409, 'دسته‌بندی با این نام قبلاً ایجاد شده است.');
+    const info = db.prepare('INSERT INTO categories (name, description, created_at) VALUES (?, ?, ?)').run(name, description || null, Date.now());
+    const cat = db.prepare('SELECT * FROM categories WHERE id = ?').get(Number(info.lastInsertRowid));
+    res.json({ ok: true, category: cat, message: 'دسته‌بندی با موفقیت ایجاد شد.' });
+  }));
+
+  api.put('/admin/categories/:id', adminAuth, h(async (req, res) => {
+    const id = Number(req.params.id);
+    const cat = db.prepare('SELECT id FROM categories WHERE id = ?').get(id);
+    if (!cat) throw err(404, 'دسته‌بندی پیدا نشد.');
+    const name = String(req.body.name || '').trim();
+    const description = String(req.body.description || '').trim();
+    if (!name) throw err(400, 'نام دسته‌بندی الزامی است.');
+    const existing = db.prepare('SELECT id FROM categories WHERE name = ? COLLATE NOCASE AND id != ?').get(name, id);
+    if (existing) throw err(409, 'دسته‌بندی دیگری با این نام وجود دارد.');
+    db.prepare('UPDATE categories SET name = ?, description = ? WHERE id = ?').run(name, description || null, id);
+    res.json({ ok: true, message: 'دسته‌بندی با موفقیت به‌روزرسانی شد.' });
+  }));
+
+  api.delete('/admin/categories/:id', adminAuth, h(async (req, res) => {
+    const id = Number(req.params.id);
+    const cat = db.prepare('SELECT id, name FROM categories WHERE id = ?').get(id);
+    if (!cat) throw err(404, 'دسته‌بندی پیدا نشد.');
+    const userCount = db.prepare('SELECT COUNT(DISTINCT user_id) AS c FROM user_categories WHERE category_id = ?').get(id).c;
+    if (userCount > 0) {
+      throw err(400, `امکان حذف دسته‌بندی وجود ندارد؛ ${userCount} کاربر در این دسته‌بندی قرار دارند. لطفاً ابتدا دسته‌بندی این کاربران را تغییر دهید.`);
+    }
+    db.prepare('DELETE FROM categories WHERE id = ?').run(id);
+    res.json({ ok: true, message: `دسته‌بندی «${cat.name}» با موفقیت حذف شد.` });
+  }));
+
+  /* ---------------- کاربران ویژه ---------------- */
+
+  api.get('/admin/special-users', adminAuth, h(async (req, res) => {
+    const users = db.prepare(`
+      SELECT u.id, u.username, u.display_name, u.avatar_file_id, u.category_id, c.name AS category_name, u.created_at
+      FROM users u
+      LEFT JOIN categories c ON c.id = u.category_id
+      WHERE u.is_special = 1 AND u.username != 'safir'
+      ORDER BY u.display_name
+    `).all();
+    res.json({ special_users: users.map(u => ({ ...userPublic(u), category_name: u.category_name })) });
+  }));
+
+  api.post('/admin/special-users/:id', adminAuth, h(async (req, res) => {
+    const targetId = Number(req.params.id);
+    const u = getUserById(targetId);
+    if (!u) throw err(404, 'کاربر پیدا نشد.');
+    if (u.username === 'safir') throw err(400, 'ربات سفیر قابل تغییر نیست.');
+    db.prepare('UPDATE users SET is_special = 1 WHERE id = ?').run(targetId);
+    sock.emitToUser(targetId, 'user-status-changed', { is_special: true });
+    res.json({ ok: true, message: `کاربر «${u.display_name}» به عنوان کاربر ویژه تعیین شد و به تمام دسته‌بندی‌ها دسترسی دارد.` });
+  }));
+
+  api.delete('/admin/special-users/:id', adminAuth, h(async (req, res) => {
+    const targetId = Number(req.params.id);
+    const u = getUserById(targetId);
+    if (!u) throw err(404, 'کاربر پیدا نشد.');
+    db.prepare('UPDATE users SET is_special = 0 WHERE id = ?').run(targetId);
+    sock.emitToUser(targetId, 'user-status-changed', { is_special: false });
+    res.json({ ok: true, message: `دسترسی ویژه کاربر «${u.display_name}» لغو شد.` });
+  }));
+
+  /* ---------------- کانال رسمی قاسم‌گرام ---------------- */
+
+  api.get('/admin/official-channel', adminAuth, h(async (req, res) => {
+    const official = ensureOfficialChannel();
+    const owner = official ? getUserById(official.created_by) : null;
+    const memberCount = official ? chatMemberCount(official.id) : 0;
+    const candidates = db.prepare("SELECT id, username, display_name FROM users WHERE status = 'approved' ORDER BY display_name").all();
+    res.json({
+      channel: {
+        id: Number(official.id),
+        title: official.title,
+        about: official.about,
+        is_official: 1,
+        created_by: Number(official.created_by),
+        member_count: memberCount,
+      },
+      owner: owner ? userPublic(owner) : null,
+      candidates,
+    });
+  }));
+
+  api.put('/admin/official-channel/owner', adminAuth, h(async (req, res) => {
+    const newOwnerId = Number(req.body.user_id);
+    const u = getUserById(newOwnerId);
+    if (!u) throw err(404, 'کاربر پیدا نشد.');
+    const official = ensureOfficialChannel();
+    const oldOwnerId = official.created_by;
+
+    db.exec('BEGIN');
+    try {
+      db.prepare('UPDATE chats SET created_by = ? WHERE id = ?').run(newOwnerId, official.id);
+      db.prepare("UPDATE chat_members SET role = 'member' WHERE chat_id = ? AND user_id = ?").run(official.id, oldOwnerId);
+      db.prepare("INSERT INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, 'owner', ?) ON CONFLICT(chat_id, user_id) DO UPDATE SET role = 'owner'").run(official.id, newOwnerId, Date.now());
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+
+    for (const m of db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(official.id)) {
+      sock.emitToUser(m.user_id, 'chat', chatListItem(official.id, m.user_id));
+    }
+    res.json({ ok: true, message: `مالک کانال رسمی قاسم‌گرام به «${u.display_name}» تغییر یافت.` });
+  }));
+
+  api.post('/admin/official-channel/sync', adminAuth, h(async (req, res) => {
+    const official = ensureOfficialChannel();
+    const now = Date.now();
+    const info = db.prepare(`
+      INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at)
+      SELECT ?, id, 'member', ? FROM users WHERE status = 'approved' AND id NOT IN (
+        SELECT user_id FROM chat_members WHERE chat_id = ?
+      )
+    `).run(official.id, now, official.id);
+    for (const m of db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(official.id)) {
+      sock.emitToUser(m.user_id, 'chat', chatListItem(official.id, m.user_id));
+    }
+    res.json({ ok: true, added_count: info.changes, message: `همگام‌سازی انجام شد و تمام کاربران عضو کانال رسمی شدند.` });
+  }));
+
+  // رد یا مسدودسازی کاربر توسط ادمین
+  api.post('/admin/users/:id/reject', adminAuth, h(async (req, res) => {
+    const targetId = Number(req.params.id);
+    const u = getUserById(targetId);
+    if (!u) throw err(404, 'کاربر پیدا نشد.');
+    if (u.username === 'safir') throw err(400, 'ربات سفیر قابل ویرایش نیست.');
+
+    db.prepare("UPDATE users SET status = 'rejected' WHERE id = ?").run(targetId);
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(targetId);
+    sock.emitToUser(targetId, 'user-status-changed', { status: 'rejected' });
+    sock.disconnectUser(targetId, 'حساب شما رد شد.');
+    res.json({ ok: true, message: 'کاربر رد شد.' });
+  }));
+
+  // بن دائمی کاربر
+  api.post('/admin/users/:id/ban-permanent', adminAuth, h(async (req, res) => {
+    const targetId = Number(req.params.id);
+    const u = getUserById(targetId);
+    if (!u) throw err(404, 'کاربر پیدا نشد.');
+    if (u.username === 'safir') throw err(400, 'ربات سفیر قابل بن شدن نیست.');
+
+    db.prepare("UPDATE users SET status = 'banned', banned_until = NULL WHERE id = ?").run(targetId);
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(targetId);
+    sock.disconnectUser(targetId, 'این حساب بن شده است.');
+    res.json({ ok: true, message: 'کاربر به صورت دائمی بن شد و از تمامی دستگاه‌ها خارج شد.' });
+  }));
+
+  // بن موقت کاربر
+  api.post('/admin/users/:id/ban-temp', adminAuth, h(async (req, res) => {
+    const targetId = Number(req.params.id);
+    const u = getUserById(targetId);
+    if (!u) throw err(404, 'کاربر پیدا نشد.');
+    if (u.username === 'safir') throw err(400, 'ربات سفیر قابل بن شدن نیست.');
+
+    const hours = Number(req.body.hours) || 24;
+    if (hours <= 0) throw err(400, 'مدت زمان بن موقت باید بیشتر از صفر باشد.');
+    const durationMs = hours * 3600 * 1000;
+    const bannedUntil = Date.now() + durationMs;
+
+    db.prepare("UPDATE users SET status = 'temp_banned', banned_until = ? WHERE id = ?").run(bannedUntil, targetId);
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(targetId);
+    const remStr = formatRemainingBanTime(durationMs);
+    sock.disconnectUser(targetId, `این حساب بن شده است. زمان باقی‌مانده: ${remStr}`);
+    res.json({
+      ok: true,
+      banned_until: bannedUntil,
+      remaining: remStr,
+      message: `کاربر به مدت ${remStr} بن موقت شد و از تمامی دستگاه‌ها خارج گردید.`,
+    });
+  }));
+
+  // رفع مسدودیت (آن‌بن) کاربر
+  api.post('/admin/users/:id/unban', adminAuth, h(async (req, res) => {
+    const targetId = Number(req.params.id);
+    const u = getUserById(targetId);
+    if (!u) throw err(404, 'کاربر پیدا نشد.');
+
+    db.prepare("UPDATE users SET status = 'approved', banned_until = NULL WHERE id = ?").run(targetId);
+    res.json({ ok: true, message: 'مسدودیت کاربر برداشته شد.' });
+  }));
+
+  // حذف دائم و کامل کاربر از سرور و دیتابیس (جدا از بن)
+  api.delete('/admin/users/:id', adminAuth, h(async (req, res) => {
+    const targetId = Number(req.params.id);
+    const u = getUserById(targetId);
+    if (!u) throw err(404, 'کاربر پیدا نشد.');
+    if (u.username === 'safir') throw err(400, 'ربات سفیر قابل حذف نیست.');
+
+    deleteUserCompletely(targetId);
+    res.json({ ok: true, message: `کاربر @${u.username} و تمامی اطلاعات و فایل‌های آن به طور کامل از دیتابیس و سرور حذف شدند.` });
+  }));
+
+  /* ---------------- وب‌پوش (Web Push Notifications) ---------------- */
+
+  // دریافت کلید عمومی VAPID
+  api.get('/push/vapid-key', (req, res) => {
+    res.json({ publicKey: getVapidPublicKey() });
+  });
+
+  // ثبت یا به‌روزرسانی سابسکرایبشن کاربر
+  api.post('/push/subscribe', auth, h(async (req, res) => {
+    const { subscription } = req.body;
+    if (!subscription || !subscription.endpoint || !subscription.keys || !subscription.keys.p256dh || !subscription.keys.auth) {
+      throw err(400, 'اطلاعات سابسکرایبشن نامعتبر است.');
+    }
+
+    const { endpoint, keys } = subscription;
+    const sessionToken = req.token || null;
+    const userAgent = (req.headers['user-agent'] || '').substring(0, 255);
+    const now = Date.now();
+
+    db.prepare(`
+      INSERT INTO push_subscriptions (user_id, session_token, endpoint, p256dh, auth, user_agent, created_at, last_used_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(endpoint) DO UPDATE SET
+        user_id = excluded.user_id,
+        session_token = excluded.session_token,
+        p256dh = excluded.p256dh,
+        auth = excluded.auth,
+        user_agent = excluded.user_agent,
+        last_used_at = excluded.last_used_at
+    `).run(req.user.id, sessionToken, endpoint, keys.p256dh, keys.auth, userAgent, now, now);
+
+    res.json({ ok: true, message: 'اشتراک اعلان‌ها با موفقیت ثبت شد.' });
+  }));
+
+  // لغو سابسکرایبشن
+  api.post('/push/unsubscribe', auth, h(async (req, res) => {
+    const { endpoint } = req.body;
+    if (!endpoint) throw err(400, 'فیلد endpoint الزامی است.');
+
+    db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(endpoint);
+    res.json({ ok: true, message: 'اشتراک اعلان لغو گردید.' });
+  }));
+
+  // ارسال اعلان آزمایشی به کاربر فعلی
+  api.post('/push/test', auth, h(async (req, res) => {
+    const countRow = db.prepare('SELECT COUNT(*) AS count FROM push_subscriptions WHERE user_id = ?').get(req.user.id);
+    const count = countRow ? countRow.count : 0;
+    if (count === 0) {
+      return res.json({ ok: false, message: 'هیچ دستگاهی برای اعلان‌های شما ثبت نشده است. لطفاً ابتدا دکمه فعال‌سازی را بزنید.' });
+    }
+
+    await sendPushToUser(db, req.user.id, {
+      title: 'قاسم‌گرام',
+      body: '🎉 این یک اعلان آزمایشی از قاسم‌گرام است! وب‌پوش روی دستگاه شما فعال است.',
+      icon: req.user.avatar_file_id ? `/api/files/${req.user.avatar_file_id}` : '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      tag: 'test-push',
+      renotify: true,
+      data: { url: '/' }
+    });
+
+    res.json({ ok: true, message: `اعلان آزمایشی به ${count} دستگاه شما ارسال شد.` });
+  }));
+
+  /* ---------------- تنظیمات تماس صوتی WebRTC P2P ---------------- */
+
+  api.get('/rtc-config', auth, (req, res) => {
+    const iceServers = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun3.l.google.com:19302' },
+      { urls: 'stun:stun4.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      { urls: 'stun:global.stun.twilio.com:3478' },
+    ];
+
+    if (process.env.TURN_URLS) {
+      const turnUrls = process.env.TURN_URLS.split(',').map((u) => u.trim()).filter(Boolean);
+      const turnConfig = { urls: turnUrls };
+      if (process.env.TURN_USERNAME) turnConfig.username = process.env.TURN_USERNAME;
+      if (process.env.TURN_CREDENTIAL) turnConfig.credential = process.env.TURN_CREDENTIAL;
+      iceServers.unshift(turnConfig);
+    }
+
+    const config = {
+      iceServers,
+      iceCandidatePoolSize: 10,
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require',
+    };
+
+    res.json({
+      ok: true,
+      rtc_config: config,
+      ...config,
+    });
+  });
+
+  /* ---------------- مدیریت خطا ---------------- */
+
+  // eslint-disable-next-line no-unused-vars
+  api.use((error, req, res, next) => {
+    if (req.file && req.file.filename) {
+      const existsInDb = db.prepare('SELECT 1 FROM files WHERE stored_name = ?').get(req.file.filename);
+      if (!existsInDb) {
+        const p = path.join(UPLOAD_DIR, req.file.filename);
+        if (fs.existsSync(p)) {
+          try { fs.unlinkSync(p); } catch {}
+        }
+      }
+    }
+    if (error instanceof multer.MulterError) {
+      const msg =
+        error.code === 'LIMIT_FILE_SIZE'
+          ? 'حجم فایل بیش از حد مجاز (۲۰۰ مگابایت) است.'
+          : 'خطا در بارگذاری فایل.';
+      return res.status(400).json({ error: msg });
+    }
+    const status = error.status || 500;
+    if (status >= 500) console.error(error);
+    res.status(status).json({ error: error.message || 'خطای سرور' });
+  });
+
+  return api;
+};
