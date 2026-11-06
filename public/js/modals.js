@@ -994,7 +994,7 @@ function bindPollModal() {
     try {
       await api(`/chats/${state.activeChatId}/polls`, {
         method: 'POST',
-        body: { question, options, is_anonymous, is_multiple },
+        body: { question, options, is_anonymous, is_multiple, allows_multiple: is_multiple },
       });
       closeModals();
       showToast('نظرسنجی ایجاد شد 📊');

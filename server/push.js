@@ -44,7 +44,7 @@ function getVapidPublicKey() {
 /**
  * ارسال اعلان به یک سابسکرایبشن خاص با حذف خودکار در صورت باطل شدن (410/404)
  */
-async function sendToSubscription(db, subRow, payload) {
+async function sendToSubscription(db, subRow, payload, customOptions = {}) {
   const pushSubscription = {
     endpoint: subRow.endpoint,
     keys: {
@@ -54,8 +54,8 @@ async function sendToSubscription(db, subRow, payload) {
   };
 
   const options = {
-    TTL: 24 * 60 * 60, // ۲۴ ساعت اعتبار در سرور پوش
-    urgency: 'high'    // اولویت بالا برای پیام‌رسان
+    TTL: customOptions.TTL !== undefined ? customOptions.TTL : (payload.TTL || 24 * 60 * 60), // اعتبار پیش‌فرض یا کوتاه‌مدت برای تماس
+    urgency: customOptions.urgency || payload.urgency || 'high' // اولویت بالا
   };
 
   try {
@@ -83,13 +83,13 @@ async function sendToSubscription(db, subRow, payload) {
 /**
  * ارسال اعلان به تمامی دستگاه‌های فعال یک کاربر
  */
-async function sendPushToUser(db, userId, payload) {
+async function sendPushToUser(db, userId, payload, customOptions = {}) {
   if (!userId) return;
   try {
     const subs = db.prepare('SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?').all(userId);
     if (!subs || subs.length === 0) return;
 
-    await Promise.allSettled(subs.map((s) => sendToSubscription(db, s, payload)));
+    await Promise.allSettled(subs.map((s) => sendToSubscription(db, s, payload, customOptions)));
   } catch (err) {
     console.error(`[Push] خطا در ارسال اعلان به کاربر ${userId}:`, err);
   }

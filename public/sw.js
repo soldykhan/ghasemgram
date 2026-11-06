@@ -3,7 +3,7 @@
  * فراهم‌کننده قابلیت‌های PWA، پشتیبانی آفلاین و زیرساخت نوتیفیکیشن
  */
 
-const CACHE_NAME = 'ghasemgram-cache-v7';
+const CACHE_NAME = 'ghasemgram-cache-v11';
 
 // لیست فایل‌های پوسته اصلی برنامه (App Shell) برای کش اولیه
 const PRECACHE_ASSETS = [
@@ -13,6 +13,7 @@ const PRECACHE_ASSETS = [
   '/js/constants.js',
   '/js/state.js',
   '/js/voice.js',
+  '/js/call.js',
   '/js/messages.js',
   '/js/chats.js',
   '/js/modals.js',
@@ -137,6 +138,74 @@ self.addEventListener('push', (event) => {
     data = { title: 'قاسم‌گرام', body: event.data.text() };
   }
 
+  // ۱. لغو یا انصراف تماس (تماس بی‌پاسخ ماند یا قطع شد)
+  if (data.type === 'cancel_call') {
+    const callTag = data.tag || (data.callId ? `incoming-call-${data.callId}` : null);
+    event.waitUntil(
+      self.registration.getNotifications().then((notifications) => {
+        notifications.forEach((notif) => {
+          if (!callTag || notif.tag === callTag) {
+            notif.close();
+          }
+        });
+      })
+    );
+    return;
+  }
+
+  // ۲. تماس صوتی ورودی (بیدار کردن دستگاه و زنگ خوردن در پس‌زمینه)
+  if (data.type === 'incoming_call') {
+    const callId = data.callId || (data.data && data.data.callId);
+    const chatId = data.chatId || (data.data && data.data.chatId);
+    const callerName = data.callerName || (data.data && data.data.callerName) || 'یک کاربر';
+    const callerAvatar = data.callerAvatar || (data.data && data.data.callerAvatar) || '/icons/icon-192.png';
+    const targetUrl = `/#c=${chatId || 0}&call=${callId}`;
+
+    const callOptions = {
+      body: `📞 ${callerName} در حال تماس با شما است...`,
+      icon: callerAvatar,
+      badge: '/icons/icon-192.png',
+      tag: `incoming-call-${callId}`,
+      renotify: true,
+      requireInteraction: true, // تا زمان پاسخ یا رد، در صفحه قفل/نوتیفیکیشن بماند
+      // الگوی ویبره طولانی شبیه به زنگ تلفن
+      vibrate: [500, 250, 500, 250, 500, 250, 500, 250, 500],
+      dir: 'rtl',
+      lang: 'fa',
+      data: {
+        type: 'incoming_call',
+        callId: callId,
+        chatId: chatId,
+        callerName: callerName,
+        url: targetUrl
+      },
+      actions: [
+        { action: 'answer', title: '📞 پاسخ' },
+        { action: 'reject', title: '❌ رد تماس' }
+      ]
+    };
+
+    event.waitUntil(
+      self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+        // ارسال پیام به تب‌های باز برنامه
+        clientList.forEach((c) => {
+          c.postMessage({
+            type: 'INCOMING_CALL_PUSH',
+            callId,
+            chatId,
+            callerName,
+            callerAvatar
+          });
+        });
+
+        // نمایش اعلان با اولویت بالا و ویبره حتی اگر پنجره بسته باشد
+        return self.registration.showNotification(`📞 تماس صوتی از ${callerName}`, callOptions);
+      })
+    );
+    return;
+  }
+
+  // ۳. پیام‌های متنی و عادی چت
   const title = data.title || 'پیام جدید در قاسم‌گرام';
   const chatId = (data.data && data.data.chatId) || data.chatId || 0;
   const targetUrl = (data.data && data.data.url) || data.url || (chatId ? `/#c=${chatId}` : '/');
@@ -180,20 +249,45 @@ self.addEventListener('push', (event) => {
   );
 });
 
-// کلیک روی اعلان: باز کردن یا فوکوس روی پنجره برنامه
+// کلیک روی اعلان یا دکمه‌های اقدام (پاسخ/رد تماس/باز کردن گفتگو)
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const notifData = event.notification.data || {};
+  const action = event.action;
+
+  // ۱. رد تماس از طریق اعلان پس‌زمینه
+  if (action === 'reject' && notifData.callId) {
+    event.waitUntil(
+      fetch(`/api/calls/${encodeURIComponent(notifData.callId)}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      }).catch((err) => {
+        console.warn('[SW] خطا در ارسال رد تماس به سرور:', err);
+      })
+    );
+    return;
+  }
+
   const targetUrl = notifData.url || '/';
   const chatId = notifData.chatId;
+  const isCall = notifData.type === 'incoming_call';
+  const callId = notifData.callId;
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (clientList) => {
-      // ۱. اگر پنجره‌ای از برنامه باز است، فوکوس کن و پیام برو به چت بفرست
+      // اگر پنجره‌ای از برنامه باز است، فوکوس کن
       for (const client of clientList) {
         if (client.url.startsWith(self.location.origin) && 'focus' in client) {
           await client.focus();
-          if (chatId) {
+
+          if (isCall && callId) {
+            client.postMessage({
+              type: 'ANSWER_CALL',
+              callId: callId,
+              chatId: chatId,
+              url: targetUrl
+            });
+          } else if (chatId) {
             client.postMessage({
               type: 'NAVIGATE_CHAT',
               chatId: chatId,
@@ -204,7 +298,7 @@ self.addEventListener('notificationclick', (event) => {
         }
       }
 
-      // ۲. در غیر این صورت پنجره جدید باز کن
+      // در غیر این صورت پنجره جدید باز کن
       if (self.clients.openWindow) {
         return self.clients.openWindow(targetUrl);
       }

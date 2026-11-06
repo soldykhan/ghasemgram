@@ -1225,17 +1225,62 @@
         کاربر مقصد: -
       </p>
       <div class="alert alert-warning" style="font-size: 12.5px;">
-        💡 با تایید کاربر، وی به دسته‌بندی انتخاب‌شده منتسب شده و به طور خودکار به عضویت «کانال رسمی قاسم‌گرام» درخواهد آمد.
+        💡 با تایید کاربر، وی به دسته‌بندی‌های انتخاب‌شده منتسب شده و به طور خودکار به عضویت «کانال رسمی قاسم‌گرام» درخواهد آمد.
       </div>
       <form id="form-approve-user">
         <input type="hidden" id="approve-user-id">
         <div class="form-group">
-          <label for="approve-cat-select">انتخاب دسته‌بندی کاربر (الزامی)</label>
-          <select id="approve-cat-select" class="form-control" required></select>
+          <label>انتخاب دسته‌بندی‌های کاربر (می‌توانید چند دسته‌بندی را علامت بزنید):</label>
+          <div id="approve-cat-checkboxes" style="display: flex; flex-direction: column; gap: 8px; max-height: 180px; overflow-y: auto; background: rgba(255,255,255,0.03); padding: 10px; border-radius: 8px; border: 1px solid var(--border);"></div>
         </div>
         <div style="display: flex; gap: 10px; margin-top: 20px;">
           <button type="submit" class="btn btn-success" style="flex: 1;">تایید نهایی و اختصاص دسته‌بندی</button>
           <button type="button" class="btn btn-outline" onclick="closeApproveModal()">انصراف</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- مودال مشاهده کاربران یک دسته‌بندی -->
+  <div class="modal-overlay hidden" id="modal-category-users">
+    <div class="modal-box" style="max-width: 650px; max-height: 85vh; display: flex; flex-direction: column;">
+      <div class="modal-header">
+        <h3 id="category-users-modal-title">👥 کاربران دسته‌بندی</h3>
+        <button class="modal-close" onclick="closeCategoryUsersModal()">✕</button>
+      </div>
+      <div style="margin-bottom: 12px;">
+        <input type="text" id="cat-users-filter-input" class="form-control" placeholder="🔍 جستجو در کاربران این دسته‌بندی...">
+      </div>
+      <div id="category-users-list-container" style="overflow-y: auto; max-height: 55vh; display: flex; flex-direction: column; gap: 10px; padding-left: 4px;">
+      </div>
+      <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
+        <button type="button" class="btn btn-outline" onclick="closeCategoryUsersModal()">بستن</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- مودال ویرایش دسته‌بندی‌های کاربر -->
+  <div class="modal-overlay hidden" id="modal-user-categories">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>📂 ویرایش دسته‌بندی‌های کاربر</h3>
+        <button class="modal-close" onclick="closeUserCategoriesModal()">✕</button>
+      </div>
+      <p style="font-size: 13.5px; color: #fff; margin-bottom: 12px;" id="user-categories-modal-label">
+        کاربر مقصد: -
+      </p>
+      <div class="alert alert-warning" style="font-size: 12px; margin-bottom: 14px;">
+        💡 می‌توانید کاربر را همزمان عضو چندین دسته‌بندی کنید. کاربر می‌تواند با تمامی اعضای دسته‌بندی‌های انتخابی چت و گفتگو داشته باشد.
+      </div>
+      <form id="form-user-categories">
+        <input type="hidden" id="edit-user-categories-uid">
+        <div class="form-group">
+          <label>انتخاب دسته‌بندی‌های مجاز برای این کاربر:</label>
+          <div id="user-categories-checkboxes" style="display: flex; flex-direction: column; gap: 8px; max-height: 200px; overflow-y: auto; background: rgba(255,255,255,0.03); padding: 10px; border-radius: 8px; border: 1px solid var(--border);"></div>
+        </div>
+        <div style="display: flex; gap: 10px; margin-top: 20px;">
+          <button type="submit" class="btn btn-primary" style="flex: 1;">ذخیره دسته‌بندی‌ها</button>
+          <button type="button" class="btn btn-outline" onclick="closeUserCategoriesModal()">انصراف</button>
         </div>
       </form>
     </div>
@@ -1389,7 +1434,10 @@
               ✅ تایید و انتخاب دسته‌بندی
             </button>
             <button class="btn btn-danger btn-sm" onclick="rejectUser(${u.id}, '${escapeHtml(u.display_name)}')">
-              ❌ رد درخواست
+              ❌ رد
+            </button>
+            <button class="btn btn-outline btn-sm" style="color:#ff7675; border-color:rgba(231,76,60,0.4);" onclick="deleteUserCompletelyPrompt(${u.id}, '${escapeHtml(u.display_name)}')">
+              🗑 حذف کامل
             </button>
           </div>
         </div>
@@ -1409,10 +1457,10 @@
 
         if (u.status === 'banned') {
           badgeHtml = `<span class="status-badge banned">🚫 بن دائمی</span>`;
-          banBtnHtml = `<button class="btn btn-outline btn-sm" style="color:var(--success); border-color:var(--success);" onclick="unbanUser(${u.id}, '${escapeHtml(u.display_name)}')">🔓 رفع مسدودیت (آن‌بن)</button>`;
+          banBtnHtml = `<button class="btn btn-outline btn-sm" style="color:var(--success); border-color:var(--success);" onclick="unbanUser(${u.id}, '${escapeHtml(u.display_name)}')">🔓 رفع مسدودیت</button>`;
         } else if (u.status === 'temp_banned') {
           badgeHtml = `<span class="status-badge temp-banned">⏱ بن موقت (${escapeHtml(u.banned_remaining || 'فعال')})</span>`;
-          banBtnHtml = `<button class="btn btn-outline btn-sm" style="color:var(--success); border-color:var(--success);" onclick="unbanUser(${u.id}, '${escapeHtml(u.display_name)}')">🔓 رفع مسدودیت (آن‌بن)</button>`;
+          banBtnHtml = `<button class="btn btn-outline btn-sm" style="color:var(--success); border-color:var(--success);" onclick="unbanUser(${u.id}, '${escapeHtml(u.display_name)}')">🔓 رفع مسدودیت</button>`;
         } else if (u.status === 'pending') {
           badgeHtml = `<span class="status-badge pending">⏳ در انتظار تایید</span>`;
           banBtnHtml = `
@@ -1438,14 +1486,20 @@
                 <div class="u-uname">@${escapeHtml(u.username)}</div>
                 <div class="u-meta" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:4px;">
                   <span>ثبت‌نام: ${formatDate(u.created_at)}</span>
-                  ${u.category_name ? `<span class="cat-badge">دسته‌بندی: ${escapeHtml(u.category_name)}</span>` : '<span class="cat-badge" style="opacity:0.6;">بدون دسته‌بندی</span>'}
+                  ${u.category_name ? `<span class="cat-badge">دسته‌ها: ${escapeHtml(u.category_name)}</span>` : '<span class="cat-badge" style="opacity:0.6;">بدون دسته‌بندی</span>'}
                   ${u.is_special ? '<span class="special-badge">⭐ کاربر ویژه</span>' : ''}
                 </div>
               </div>
             </div>
-            <div class="user-card-actions">
+            <div class="user-card-actions" style="flex-wrap: wrap; gap: 6px;">
               ${badgeHtml}
               ${banBtnHtml}
+              <button class="btn btn-outline btn-sm" style="color:#64b5f6; border-color:rgba(36,129,204,0.4);" onclick="openEditUserCategoriesModal(${u.id}, '${escapeHtml(u.display_name)}')">
+                📂 دسته‌ها
+              </button>
+              <button class="btn btn-outline btn-sm" style="color:#ff7675; border-color:rgba(231,76,60,0.4);" onclick="deleteUserCompletelyPrompt(${u.id}, '${escapeHtml(u.display_name)}')">
+                🗑 حذف کامل
+              </button>
             </div>
           </div>
         `;
@@ -1567,6 +1621,20 @@
       }
     }
 
+    async function deleteUserCompletelyPrompt(id, name) {
+      if (!confirm(`آیا از حذف کامل و دائم کاربر «${name}» اطمینان دارید؟\n\n⚠️ هشدار بسیار مهم: این عملیات غیرقابل بازگشت است و کاربر به همراه تمامی پیام‌ها، فایل‌های آپلود شده، گفتگوها و سوابق به طور کامل از دیتابیس و کل سرور حذف خواهد شد.`)) {
+        return;
+      }
+      try {
+        const res = await req(`/admin/users/${id}`, { method: 'DELETE' });
+        showToast(res.message || 'کاربر و کلیه داده‌های آن با موفقیت حذف کامل شدند 🗑');
+        await loadUsers($('#user-search-input')?.value.trim() || '');
+        await loadCategories();
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
     function switchMainTab(tab) {
       $('#tab-pending-btn').classList.toggle('active', tab === 'pending');
       $('#tab-categories-btn').classList.toggle('active', tab === 'categories');
@@ -1587,7 +1655,7 @@
         const res = await req('/admin/categories');
         categories = res.categories || [];
         renderCategoriesList();
-        populateApproveCategorySelect();
+        populateApproveCategoryCheckboxes();
         renderUsersCategoryList($('#cat-user-search-input')?.value.trim() || '');
       } catch (err) {
         console.error('Failed to load categories:', err);
@@ -1602,32 +1670,172 @@
         return;
       }
       box.innerHTML = categories.map(c => `
-        <div class="category-card" data-cid="${c.id}">
+        <div class="category-card" data-cid="${c.id}" style="cursor: pointer;" onclick="viewCategoryUsers(${c.id}, '${escapeHtml(c.name)}')">
           <div class="category-card-header">
             <div class="category-card-title">${escapeHtml(c.name)}</div>
-            <div style="display:flex; gap:6px;">
+            <div style="display:flex; gap:6px;" onclick="event.stopPropagation()">
               <button class="btn btn-outline btn-sm" onclick="openEditCategoryModal(${c.id}, '${escapeHtml(c.name)}', '${escapeHtml(c.description || '')}')">✏️ ویرایش</button>
               <button class="btn btn-outline btn-sm" style="color:#ff7675; border-color:rgba(231,76,60,0.4);" onclick="deleteCategory(${c.id}, '${escapeHtml(c.name)}')">🗑</button>
             </div>
           </div>
           <div class="category-card-desc">${escapeHtml(c.description || 'بدون توضیحات')}</div>
-          <div style="display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap;">
-            <span class="cat-badge">👥 ${faNum(c.user_count || 0)} کاربر</span>
+          <div style="display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center;" onclick="event.stopPropagation()">
+            <button class="btn btn-primary btn-sm" onclick="viewCategoryUsers(${c.id}, '${escapeHtml(c.name)}')">
+              👥 مشاهده کاربران (${faNum(c.user_count || 0)})
+            </button>
             <span class="cat-badge" style="border-color: rgba(46,204,113,0.3); color:#55efc4; background: rgba(46,204,113,0.15);">💬 ${faNum(c.chat_count || 0)} گفتگو</span>
           </div>
         </div>
       `).join('');
     }
 
-    function populateApproveCategorySelect() {
-      const sel = $('#approve-cat-select');
-      if (!sel) return;
+    function populateApproveCategoryCheckboxes() {
+      const box = $('#approve-cat-checkboxes');
+      if (!box) return;
       if (!categories.length) {
-        sel.innerHTML = '<option value="">هیچ دسته‌بندی موجود نیست (ابتدا دسته‌بندی بسازید)</option>';
+        box.innerHTML = '<div style="color:var(--text-muted); font-size:13px;">هیچ دسته‌بندی موجود نیست (ابتدا دسته‌بندی بسازید)</div>';
         return;
       }
-      sel.innerHTML = categories.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+      box.innerHTML = categories.map((c, idx) => `
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 4px 0; color: #fff; font-size: 13.5px;">
+          <input type="checkbox" name="approve-cat" value="${c.id}" ${idx === 0 ? 'checked' : ''} style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--primary);">
+          <span>${escapeHtml(c.name)}</span>
+          ${c.description ? `<span style="font-size:11.5px; color:var(--text-muted);">(${escapeHtml(c.description)})</span>` : ''}
+        </label>
+      `).join('');
     }
+
+    let currentViewingCategoryUsers = [];
+    let currentViewingCatName = '';
+    let currentViewingCatId = null;
+
+    async function viewCategoryUsers(catId, catName) {
+      currentViewingCatId = Number(catId);
+      currentViewingCatName = catName;
+      $('#category-users-modal-title').textContent = `👥 اعضای دسته‌بندی «${catName}»`;
+      $('#cat-users-filter-input').value = '';
+      $('#modal-category-users').classList.remove('hidden');
+      $('#category-users-list-container').innerHTML = '<div style="text-align:center; padding:24px; color:var(--text-muted);">در حال دریافت لیست کاربران...</div>';
+
+      try {
+        const res = await req(`/admin/categories/${catId}/users`);
+        currentViewingCategoryUsers = res.users || [];
+        renderCategoryUsersModalList();
+      } catch (err) {
+        $('#category-users-list-container').innerHTML = `<div class="alert alert-danger">${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    function renderCategoryUsersModalList(filter = '') {
+      const box = $('#category-users-list-container');
+      const q = (filter || '').trim().toLowerCase();
+      const filtered = q
+        ? currentViewingCategoryUsers.filter(u => u.username.toLowerCase().includes(q) || u.display_name.toLowerCase().includes(q))
+        : currentViewingCategoryUsers;
+
+      if (!filtered.length) {
+        box.innerHTML = `<div class="empty-state" style="padding:24px 0;"><p>${q ? 'کاربری با این مشخصات یافت نشد.' : 'هیچ کاربری در این دسته‌بندی عضو نیست.'}</p></div>`;
+        return;
+      }
+
+      box.innerHTML = filtered.map(u => {
+        let statusBadge = '';
+        if (u.status === 'banned') statusBadge = '<span class="status-badge banned">🚫 بن</span>';
+        else if (u.status === 'temp_banned') statusBadge = '<span class="status-badge temp-banned">⏱ بن موقت</span>';
+        else if (u.status === 'pending') statusBadge = '<span class="status-badge pending">⏳ در انتظار</span>';
+        else statusBadge = '<span class="status-badge approved">✓ فعال</span>';
+
+        return `
+          <div class="user-card" style="padding:10px 14px; margin-bottom:0; background:rgba(255,255,255,0.03);">
+            <div class="user-card-main">
+              <div class="u-avatar" style="width:38px; height:38px; font-size:14px;">
+                ${u.avatar_url ? `<img src="${u.avatar_url}" alt="">` : (u.display_name ? u.display_name.slice(0, 2) : '👤')}
+              </div>
+              <div class="u-details">
+                <div class="u-name" style="font-size:13.5px;">${escapeHtml(u.display_name)}</div>
+                <div class="u-uname" style="font-size:11.5px;">@${escapeHtml(u.username)}</div>
+                <div class="u-meta" style="margin-top:2px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+                  ${statusBadge}
+                  ${u.categories && u.categories.length > 1 ? `<span class="cat-badge" style="font-size:11px;">سایر دسته‌ها: ${escapeHtml(u.categories.filter(c => c.id !== currentViewingCatId).map(c => c.name).join('، '))}</span>` : ''}
+                </div>
+              </div>
+            </div>
+            <div class="user-card-actions" style="gap:6px;">
+              <button class="btn btn-outline btn-sm" onclick="openEditUserCategoriesModal(${u.id}, '${escapeHtml(u.display_name)}', true)">
+                ✏️ ویرایش دسته‌ها
+              </button>
+              <button class="btn btn-outline btn-sm" style="color:#ff7675; border-color:rgba(231,76,60,0.4);" onclick="deleteUserCompletelyPrompt(${u.id}, '${escapeHtml(u.display_name)}')">
+                🗑 حذف
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function closeCategoryUsersModal() {
+      $('#modal-category-users').classList.add('hidden');
+    }
+
+    let isEditingFromCatUsersModal = false;
+
+    function openEditUserCategoriesModal(userId, displayName, fromCatUsersModal = false) {
+      isEditingFromCatUsersModal = !!fromCatUsersModal;
+      $('#edit-user-categories-uid').value = userId;
+      $('#user-categories-modal-label').textContent = `کاربر مقصد: «${displayName}»`;
+
+      const u = allUsers.find(item => item.id === Number(userId)) || currentViewingCategoryUsers.find(item => item.id === Number(userId));
+      const userCatIds = u ? (u.category_ids || [u.category_id].filter(Boolean)) : [];
+
+      const box = $('#user-categories-checkboxes');
+      if (!categories.length) {
+        box.innerHTML = '<div style="color:var(--text-muted); font-size:13px;">هیچ دسته‌بندی موجود نیست.</div>';
+      } else {
+        box.innerHTML = categories.map(c => {
+          const checked = userCatIds.includes(Number(c.id));
+          return `
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 4px 0; color: #fff; font-size: 13.5px;">
+              <input type="checkbox" name="user-cat" value="${c.id}" ${checked ? 'checked' : ''} style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--primary);">
+              <span>${escapeHtml(c.name)}</span>
+              ${c.description ? `<span style="font-size:11.5px; color:var(--text-muted);">(${escapeHtml(c.description)})</span>` : ''}
+            </label>
+          `;
+        }).join('');
+      }
+      $('#modal-user-categories').classList.remove('hidden');
+    }
+
+    function closeUserCategoriesModal() {
+      $('#modal-user-categories').classList.add('hidden');
+    }
+
+    $('#form-user-categories')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const userId = $('#edit-user-categories-uid').value;
+      const checkedBoxes = Array.from(document.querySelectorAll('input[name="user-cat"]:checked'));
+      const category_ids = checkedBoxes.map(cb => Number(cb.value)).filter(Boolean);
+      if (!category_ids.length) {
+        showToast('حداقل باید یک دسته‌بندی انتخاب شود.');
+        return;
+      }
+      try {
+        const res = await req(`/admin/users/${userId}/categories`, {
+          method: 'PUT',
+          body: JSON.stringify({ category_ids }),
+        });
+        closeUserCategoriesModal();
+        showToast(res.message || 'دسته‌بندی‌های کاربر به‌روزرسانی شد ✅');
+        await loadUsers($('#user-search-input')?.value.trim() || '');
+        await loadCategories();
+        if (isEditingFromCatUsersModal && currentViewingCatId) {
+          const resUsers = await req(`/admin/categories/${currentViewingCatId}/users`);
+          currentViewingCategoryUsers = resUsers.users || [];
+          renderCategoryUsersModalList($('#cat-users-filter-input')?.value || '');
+        }
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
 
     function renderUsersCategoryList(search = '') {
       const box = $('#users-category-list');
@@ -1644,11 +1852,9 @@
       }
 
       box.innerHTML = filtered.map(u => {
-        const catOptions = categories.map(c => `
-          <option value="${c.id}" ${Number(u.category_id) === Number(c.id) ? 'selected' : ''}>
-            ${escapeHtml(c.name)}
-          </option>
-        `).join('');
+        const catBadges = u.categories && u.categories.length
+          ? u.categories.map(c => `<span class="cat-badge">${escapeHtml(c.name)}</span>`).join(' ')
+          : '<span class="cat-badge" style="opacity:0.6;">بدون دسته‌بندی</span>';
 
         return `
           <div class="user-card" data-uid="${u.id}">
@@ -1659,37 +1865,25 @@
               <div class="u-details">
                 <div class="u-name">${escapeHtml(u.display_name)}</div>
                 <div class="u-uname">@${escapeHtml(u.username)}</div>
-                <div class="u-meta" style="display:flex; gap:6px; flex-wrap:wrap; margin-top:4px;">
-                  <span class="cat-badge">دسته‌بندی فعلی: ${escapeHtml(u.category_name || 'تعیین‌نشده')}</span>
+                <div class="u-meta" style="display:flex; gap:6px; flex-wrap:wrap; margin-top:4px; align-items:center;">
+                  <span style="font-size:12px; color:var(--text-muted);">دسته‌بندی‌های کاربر:</span>
+                  ${catBadges}
                   ${u.is_special ? '<span class="special-badge">⭐ کاربر ویژه</span>' : ''}
                 </div>
               </div>
             </div>
-            <div class="user-card-actions" style="gap: 10px;">
-              <select id="user-cat-select-${u.id}" class="form-control" style="width: auto; min-width: 170px; padding: 6px 10px;">
-                ${catOptions}
-              </select>
-              <button class="btn btn-primary btn-sm" onclick="saveUserCategoryChange(${u.id})">
-                💾 ثبت تغییر
+            <div class="user-card-actions" style="gap: 8px; flex-wrap: wrap;">
+              <button class="btn btn-primary btn-sm" onclick="openEditUserCategoriesModal(${u.id}, '${escapeHtml(u.display_name)}')">
+                ✏️ مدیریت دسته‌بندی‌ها
+              </button>
+              <button class="btn btn-outline btn-sm" style="color:#ff7675; border-color:rgba(231,76,60,0.4);" onclick="deleteUserCompletelyPrompt(${u.id}, '${escapeHtml(u.display_name)}')">
+                🗑 حذف کامل
               </button>
             </div>
           </div>
         `;
       }).join('');
     }
-
-    async function saveUserCategoryChange(userId) {
-      const sel = $(`#user-cat-select-${userId}`);
-      if (!sel) return;
-      const catId = sel.value;
-      if (!catId) {
-        showToast('لطفاً دسته‌بندی را انتخاب کنید.');
-        return;
-      }
-      try {
-        const res = await req(`/admin/users/${userId}/category`, {
-          method: 'PUT',
-          body: JSON.stringify({ category_id: Number(catId) }),
         });
         showToast(res.message || 'دسته‌بندی با موفقیت تغییر کرد ✅');
         await loadUsers($('#user-search-input')?.value.trim() || '');
@@ -1909,7 +2103,7 @@
     function openApproveModal(id, name) {
       $('#approve-user-id').value = id;
       $('#approve-username-label').textContent = `کاربر مقصد: «${name}»`;
-      populateApproveCategorySelect();
+      populateApproveCategoryCheckboxes();
       $('#modal-approve').classList.remove('hidden');
     }
 
@@ -1920,15 +2114,16 @@
     $('#form-approve-user')?.addEventListener('submit', async (e) => {
       e.preventDefault();
       const id = $('#approve-user-id').value;
-      const categoryId = $('#approve-cat-select').value;
-      if (!categoryId) {
-        showToast('لطفاً یک دسته‌بندی انتخاب کنید.');
+      const checkedBoxes = Array.from(document.querySelectorAll('input[name="approve-cat"]:checked'));
+      const category_ids = checkedBoxes.map(cb => Number(cb.value)).filter(Boolean);
+      if (!category_ids.length) {
+        showToast('لطفاً حداقل یک دسته‌بندی انتخاب کنید.');
         return;
       }
       try {
         const res = await req(`/admin/users/${id}/approve`, {
           method: 'POST',
-          body: JSON.stringify({ category_id: Number(categoryId) }),
+          body: JSON.stringify({ category_ids }),
         });
         closeApproveModal();
         showToast(res.message || 'کاربر تایید و دسته‌بندی شد ✅');

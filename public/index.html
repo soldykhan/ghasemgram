@@ -21,7 +21,154 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/css/style.css?v=2.1">
+  <link rel="stylesheet" href="/css/style.css?v=2.6">
+  <style id="call-critical-css">
+    /* Critical Inline Call & Banner Styles to guarantee instant styled rendering */
+    .incoming-call-card {
+      background: #1e2633;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 24px;
+      width: 90%;
+      max-width: 360px;
+      padding: 32px 24px 28px;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      color: #fff;
+      font-family: inherit;
+    }
+    .ic-avatar-wrap {
+      position: relative;
+      width: 104px;
+      height: 104px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .ic-avatar {
+      width: 92px;
+      height: 92px;
+      border-radius: 50%;
+      position: relative;
+      z-index: 2;
+      overflow: hidden;
+      background: #2a3744;
+      border: 3px solid rgba(255, 255, 255, 0.2);
+    }
+    .ic-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .ic-pulse-ring {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 96px;
+      height: 96px;
+      border-radius: 50%;
+      border: 2px solid #2ec971;
+      animation: icRingPulse 1.8s infinite ease-out;
+      pointer-events: none;
+    }
+    .ic-pulse-ring.delay { animation-delay: 0.7s; }
+    @keyframes icRingPulse {
+      0% { width: 92px; height: 92px; opacity: 0.9; }
+      100% { width: 160px; height: 160px; opacity: 0; }
+    }
+    .ic-info h3 { font-size: 19px; font-weight: 700; color: #fff; margin: 0 0 6px; }
+    .ic-info p { font-size: 13.5px; color: #94a3b8; margin: 0 0 24px; }
+    .ic-actions { width: 100%; display: flex; align-items: center; justify-content: space-around; gap: 16px; }
+    .ic-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: #fff;
+      font-family: inherit;
+      font-size: 13px;
+    }
+    .ic-btn-circle {
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+    }
+    .ic-btn-circle svg { width: 30px; height: 30px; fill: #fff; }
+    .ic-accept .ic-btn-circle { background: #2ec971; }
+    .ic-reject .ic-btn-circle { background: #ef4444; }
+
+    /* Call Overlay Screen */
+    .call-overlay {
+      position: fixed;
+      inset: 0;
+      background: radial-gradient(circle at center, #1b2836 0%, #0d141c 100%);
+      z-index: 9998;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+    }
+    .call-screen {
+      width: 100%;
+      max-width: 480px;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 30px 24px 44px;
+      box-sizing: border-box;
+    }
+    .call-header { display: flex; justify-content: space-between; align-items: center; width: 100%; }
+    .call-header-btn { background: rgba(255,255,255,0.08); border: none; border-radius: 50%; width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; color: #fff; cursor: pointer; }
+    .call-header-btn svg { width: 22px; height: 22px; fill: currentColor; }
+    .call-encryption-badge { display: flex; align-items: center; gap: 6px; font-size: 11.5px; background: rgba(255,255,255,0.08); padding: 5px 10px; border-radius: 12px; color: #94a3b8; }
+    .call-encryption-badge svg { width: 13px; height: 13px; fill: #2ec971; }
+    .call-body { display: flex; flex-direction: column; align-items: center; text-align: center; margin: auto 0; }
+    .call-avatar-container { position: relative; width: 140px; height: 140px; margin-bottom: 24px; display: flex; align-items: center; justify-content: center; }
+    .call-avatar { width: 120px; height: 120px; border-radius: 50%; z-index: 2; overflow: hidden; background: #2a3744; border: 4px solid rgba(255,255,255,0.15); box-shadow: 0 16px 36px rgba(0,0,0,0.5); }
+    .call-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .call-ripple { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); border-radius: 50%; border: 2px solid rgba(46, 201, 113, 0.4); pointer-events: none; }
+    .call-ripple.ring-1 { width: 130px; height: 130px; animation: callRipple 2.2s infinite ease-out; }
+    .call-ripple.ring-2 { width: 130px; height: 130px; animation: callRipple 2.2s infinite ease-out 0.8s; }
+    @keyframes callRipple { 0% { width: 120px; height: 120px; opacity: 0.8; } 100% { width: 220px; height: 220px; opacity: 0; } }
+    .call-user-name { font-size: 24px; font-weight: 700; color: #fff; margin: 0 0 8px; }
+    .call-status { font-size: 15px; color: #94a3b8; min-height: 24px; }
+    .call-timer { font-size: 16px; font-weight: 600; color: #2ec971; margin-top: 10px; font-variant-numeric: tabular-nums; }
+    .call-controls { display: flex; justify-content: space-around; align-items: center; width: 100%; max-width: 380px; margin: 0 auto; }
+    .call-ctrl-btn { display: flex; flex-direction: column; align-items: center; gap: 8px; background: none; border: none; cursor: pointer; color: #e2e8f0; font-family: inherit; font-size: 13px; }
+    .ctrl-icon-wrap { width: 56px; height: 56px; border-radius: 50%; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; }
+    .ctrl-icon-wrap svg { width: 26px; height: 26px; fill: #fff; }
+    .ctrl-icon-wrap.end-icon { width: 64px; height: 64px; background: #ef4444; }
+    .call-ctrl-btn.active .ctrl-icon-wrap { background: #2ec971; }
+
+    /* Push Permission Banner */
+    .push-permission-banner {
+      background: linear-gradient(135deg, #1e3a5f 0%, #1e293b 100%);
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: #fff;
+      position: relative;
+      z-index: 100;
+    }
+    .ppb-content { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+    .ppb-icon { width: 22px; height: 22px; fill: #38bdf8; flex-shrink: 0; }
+    .ppb-text strong { display: block; font-size: 13px; color: #f8fafc; }
+    .ppb-text span { font-size: 11.5px; color: #94a3b8; }
+    .ppb-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .btn-primary-sm { background: #2563eb; color: #fff; border: none; padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; }
+    .btn-text-sm { background: none; border: none; color: #94a3b8; padding: 6px 8px; font-size: 12px; cursor: pointer; }
+  </style>
 </head>
 <body>
 
@@ -68,6 +215,21 @@
     <div id="pending-banner" class="pending-approval-banner hidden">
       <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 14h-2v-2h2v2zm0-4h-2V7h2v5z"/></svg>
       <span>شما در انتظار تایید ادمین هستید</span>
+    </div>
+
+    <!-- بنر فعال‌سازی اعلان‌ها برای زنگ خوردن در حالت بسته بودن برنامه -->
+    <div id="push-permission-banner" class="push-permission-banner hidden">
+      <div class="ppb-content">
+        <svg viewBox="0 0 24 24" class="ppb-icon"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+        <div class="ppb-text">
+          <strong>اعلان‌های تماس و پیام</strong>
+          <span>برای اینکه هنگام بسته بودن برنامه تماس‌ها زنگ بخورند، اعلان را فعال کنید.</span>
+        </div>
+      </div>
+      <div class="ppb-actions">
+        <button id="ppb-enable-btn" class="btn-primary-sm">فعال‌سازی</button>
+        <button id="ppb-dismiss-btn" class="btn-text-sm">بعداً</button>
+      </div>
     </div>
 
     <div class="app-main-layout">
@@ -278,11 +440,11 @@
           <button id="back-btn" class="icon-btn mobile-only">
             <svg viewBox="0 0 24 24"><path d="M7.99 11H21v2H7.99l4.71 4.71-1.41 1.41L4.17 12l7.12-7.12 1.41 1.41z" transform="scale(-1,1) translate(-24,0)"/></svg>
           </button>
+          <button id="chat-call-btn" class="icon-btn hidden" title="تماس صوتی">
+            <svg viewBox="0 0 24 24"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56a.977.977 0 00-1.01.24l-1.57 1.97c-2.83-1.44-5.15-3.75-6.59-6.59l1.97-1.57c.28-.28.36-.67.25-1.02A11.36 11.36 0 018.57 4c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1 0 9.39 7.61 17 17 17 .55 0 1-.45 1-1v-3.62c0-.55-.45-1-1-1z"/></svg>
+          </button>
           <div class="chat-header-info" id="chat-header-info" title="اطلاعات گفتگو"></div>
           <div class="chat-header-actions">
-            <button id="chat-call-btn" class="icon-btn hidden" title="تماس صوتی">
-              <svg viewBox="0 0 24 24"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56a.977.977 0 00-1.01.24l-1.57 1.97c-2.83-1.44-5.15-3.75-6.59-6.59l1.97-1.57c.28-.28.36-.67.25-1.02A11.36 11.36 0 018.57 4c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1 0 9.39 7.61 17 17 17 .55 0 1-.45 1-1v-3.62c0-.55-.45-1-1-1z"/></svg>
-            </button>
             <button id="chat-search-btn" class="icon-btn" title="جستجو در گفتگو">
               <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 10-.7.7l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1114 9.5 4.5 4.5 0 019.5 14z"/></svg>
             </button>
@@ -809,20 +971,31 @@
         <button id="call-minimize-btn" class="call-header-btn" title="کوچک‌سازی به نوار شناور">
           <svg viewBox="0 0 24 24"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/></svg>
         </button>
+        <div id="call-quality-badge" class="call-quality-badge hidden" title="کیفیت ارتباط زنده">
+          <span class="quality-dot good" id="call-quality-dot"></span>
+          <span id="call-quality-text">عالی</span>
+        </div>
         <div class="call-encryption-badge" title="تماس مستقیم همتابه‌همتا (P2P)">
           <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
-          <span>رمزنگاری صوتی P2P</span>
+          <span>P2P HD</span>
         </div>
       </header>
 
       <div class="call-body">
-        <div class="call-avatar-container">
+        <div class="call-avatar-container" id="call-avatar-container">
           <div class="call-ripple ring-1"></div>
           <div class="call-ripple ring-2"></div>
           <div id="call-user-avatar" class="call-avatar"></div>
         </div>
         <h2 id="call-user-name" class="call-user-name">نام مخاطب</h2>
         <div id="call-status" class="call-status">در حال برقراری تماس...</div>
+        <div id="call-voice-meter" class="call-voice-meter hidden" title="نمایشگر زنده صدا">
+          <div class="call-voice-bar"></div>
+          <div class="call-voice-bar"></div>
+          <div class="call-voice-bar"></div>
+          <div class="call-voice-bar"></div>
+          <div class="call-voice-bar"></div>
+        </div>
         <div id="call-timer" class="call-timer hidden">00:00</div>
       </div>
 
@@ -854,15 +1027,15 @@
   </div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/js/constants.js?v=2.1"></script>
-  <script src="/js/state.js?v=2.1"></script>
-  <script src="/js/voice.js?v=2.1"></script>
-  <script src="/js/messages.js?v=2.1"></script>
-  <script src="/js/chats.js?v=2.1"></script>
-  <script src="/js/call.js?v=2.3"></script>
-  <script src="/js/modals.js?v=2.1"></script>
-  <script src="/js/app.js?v=2.3"></script>
-  <script src="/js/pwa.js?v=2.1"></script>
+  <script src="/js/constants.js?v=2.6"></script>
+  <script src="/js/state.js?v=2.6"></script>
+  <script src="/js/voice.js?v=2.6"></script>
+  <script src="/js/messages.js?v=2.6"></script>
+  <script src="/js/chats.js?v=2.6"></script>
+  <script src="/js/call.js?v=2.6"></script>
+  <script src="/js/modals.js?v=2.6"></script>
+  <script src="/js/app.js?v=2.6"></script>
+  <script src="/js/pwa.js?v=2.6"></script>
 </body>
 </html>
 

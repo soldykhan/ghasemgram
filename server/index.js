@@ -47,6 +47,10 @@ process.on('unhandledRejection', (reason) => {
   console.error('[UNHANDLED REJECTION]', reason);
 });
 
-server.listen(PORT, () => {
-  console.log(`✈️  GhasemGram is running →  http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`✈️  GhasemGram is running →  http://localhost:${PORT}`);
+  });
+}
+
+module.exports = { app, server, io, sock };

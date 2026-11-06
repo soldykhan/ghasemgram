@@ -129,6 +129,9 @@ function connectSocket() {
     if (typeof window.initCallSignaling === 'function') {
       window.initCallSignaling(state.socket);
     }
+    if (window.pwa && typeof window.pwa.checkPushBanner === 'function') {
+      window.pwa.checkPushBanner();
+    }
     return;
   }
   const socket = io({ auth: { token: state.token } });
@@ -136,6 +139,9 @@ function connectSocket() {
 
   if (typeof window.initCallSignaling === 'function') {
     window.initCallSignaling(socket);
+  }
+  if (window.pwa && typeof window.pwa.checkPushBanner === 'function') {
+    window.pwa.checkPushBanner();
   }
 
   socket.on('message', onIncomingMessage);
@@ -175,7 +181,10 @@ function connectSocket() {
     window.location.reload();
   });
 
-  socket.on('message-edited', ({ chat_id, message }) => {
+  socket.on('message-edited', (ev) => {
+    const chat_id = ev?.chat_id || ev?.message?.chat_id;
+    const message = ev?.message || ev;
+    if (!message || !chat_id) return;
     const store = state.messagesByChat.get(chat_id);
     if (store) {
       const i = store.findIndex((m) => m.id === message.id);
@@ -476,7 +485,11 @@ function bindSendPopover() {
       showToast('زمان را مشخص کنید');
       return;
     }
-    const scheduledAt = new Date(dt).toISOString();
+    const scheduledAt = new Date(dt).getTime();
+    if (Number.isNaN(scheduledAt) || scheduledAt <= Date.now()) {
+      showToast('زمان باید در آینده باشد');
+      return;
+    }
     $('#modal-schedule')?.classList.add('hidden');
     sendMessage({ scheduledAt });
   });

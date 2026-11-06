@@ -46,6 +46,18 @@ function fmtSize(n) {
   return faNum((n / (1024 * 1024)).toFixed(1)) + ' مگابایت';
 }
 
+function fmtDuration(sec) {
+  const s = Math.max(0, Math.floor(Number(sec) || 0));
+  const m = Math.floor(s / 60);
+  const remS = s % 60;
+  if (m < 60) {
+    return `${m}:${remS < 10 ? '0' : ''}${remS}`;
+  }
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  return `${h}:${remM < 10 ? '0' : ''}${remM}:${remS < 10 ? '0' : ''}${remS}`;
+}
+
 function sameDay(a, b) {
   if (!a || !b) return false;
   const d1 = new Date(a), d2 = new Date(b);
@@ -90,6 +102,7 @@ const NAME_COLORS = ['#e17076', '#7bc862', '#65aadd', '#a695e7', '#ee7aae', '#fa
 const nameColor = (id) => NAME_COLORS[(Math.abs(Number(id) || 0) * 7) % NAME_COLORS.length];
 
 function avatarHTML(item, cls = '') {
+  if (!item) item = {};
   const id = Math.abs(Number(item.id || 0));
   const [c1, c2] = AV_COLORS[id % AV_COLORS.length];
   const bg = ` style="background:linear-gradient(180deg,${c1},${c2})"`;

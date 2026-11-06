@@ -24,6 +24,7 @@ const db = open(path.join(DATA_DIR, 'ghasemgram.db'));
 
 db.exec(`
   PRAGMA journal_mode = WAL;
+  PRAGMA foreign_keys = ON;
 
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -183,7 +184,23 @@ db.exec(`
     created_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_categories_name ON categories(name);
+
+  CREATE TABLE IF NOT EXISTS user_categories (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, category_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_user_categories_user ON user_categories(user_id);
+  CREATE INDEX IF NOT EXISTS idx_user_categories_cat ON user_categories(category_id);
 `);
+
+try {
+  db.exec(`
+    INSERT OR IGNORE INTO user_categories (user_id, category_id, created_at)
+    SELECT id, category_id, COALESCE(created_at, 0) FROM users WHERE category_id IS NOT NULL;
+  `);
+} catch {}
 
 addColumnIfMissing('chats', 'about', 'TEXT');
 addColumnIfMissing('chats', 'invite_code', 'TEXT');
@@ -207,6 +224,9 @@ addColumnIfMissing('messages', 'link_preview', 'TEXT');
 addColumnIfMissing('messages', 'is_silent', 'INTEGER NOT NULL DEFAULT 0');
 addColumnIfMissing('messages', 'is_voice', 'INTEGER NOT NULL DEFAULT 0');
 addColumnIfMissing('messages', 'topic_id', 'INTEGER');
+
+addColumnIfMissing('scheduled_messages', 'topic_id', 'INTEGER');
+addColumnIfMissing('scheduled_messages', 'is_voice', 'INTEGER NOT NULL DEFAULT 0');
 
 addColumnIfMissing('chat_members', 'pinned', 'INTEGER NOT NULL DEFAULT 0');
 addColumnIfMissing('chat_members', 'last_read_id', 'INTEGER NOT NULL DEFAULT 0');
@@ -322,8 +342,61 @@ function ensureOfficialChannel() {
 }
 ensureOfficialChannel();
 
+function getUserCategoryIds(userId) {
+  if (!userId) return [];
+  const rows = db.prepare('SELECT category_id FROM user_categories WHERE user_id = ?').all(userId);
+  if (rows.length > 0) {
+    return rows.map((r) => Number(r.category_id));
+  }
+  const u = db.prepare('SELECT category_id FROM users WHERE id = ?').get(userId);
+  return u && u.category_id ? [Number(u.category_id)] : [];
+}
+
+function getUserCategories(userId) {
+  if (!userId) return [];
+  const rows = db.prepare(`
+    SELECT c.id, c.name, c.description
+    FROM categories c
+    JOIN user_categories uc ON uc.category_id = c.id
+    WHERE uc.user_id = ?
+    ORDER BY c.name ASC
+  `).all(userId);
+  if (rows.length > 0) return rows;
+  const u = db.prepare('SELECT c.id, c.name, c.description FROM categories c JOIN users u ON u.category_id = c.id WHERE u.id = ?').get(userId);
+  return u ? [u] : [];
+}
+
+function setUserCategories(userId, categoryIds) {
+  if (!userId) return;
+  const ids = Array.from(new Set((Array.isArray(categoryIds) ? categoryIds : [categoryIds]).map(Number).filter((n) => n > 0)));
+  const now = Date.now();
+  db.exec('BEGIN TRANSACTION');
+  try {
+    db.prepare('DELETE FROM user_categories WHERE user_id = ?').run(userId);
+    const ins = db.prepare('INSERT OR IGNORE INTO user_categories (user_id, category_id, created_at) VALUES (?, ?, ?)');
+    for (const cid of ids) {
+      ins.run(userId, cid, now);
+    }
+    const primaryId = ids.length > 0 ? ids[0] : null;
+    db.prepare('UPDATE users SET category_id = ? WHERE id = ?').run(primaryId, userId);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
 try {
   db.exec("UPDATE messages SET is_voice = 1 WHERE file_id IN (SELECT id FROM files WHERE mime_type LIKE 'audio/%')");
 } catch {}
 
-module.exports = { db, UPLOAD_DIR, ensureSafirBot, ensureDefaultCategory, ensureOfficialChannel };
+module.exports = {
+  db,
+  UPLOAD_DIR,
+  ensureSafirBot,
+  ensureDefaultCategory,
+  ensureOfficialChannel,
+  getUserCategoryIds,
+  getUserCategories,
+  setUserCategories,
+};

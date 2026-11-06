@@ -1,5 +1,7 @@
 'use strict';
 
+const { sendPushToUser } = require('./push');
+
 function initSocket(io, db) {
   // نگاشت شناسه کاربر به مجموعه سوکت‌های فعالش
   const socketsByUser = new Map();
@@ -62,6 +64,13 @@ function initSocket(io, db) {
     activeCalls.delete(callId);
     userCallMap.delete(call.callerId);
     userCallMap.delete(call.calleeId);
+
+    // لغو نوتیفیکیشن زنگ در گوشی مخاطب در صورت بسته بودن برنامه
+    sendPushToUser(db, call.calleeId, {
+      type: 'cancel_call',
+      callId: callId,
+      tag: `incoming-call-${callId}`
+    }, { TTL: 10, urgency: 'high' });
 
     emitToUser(call.callerId, 'call:timeout', { call_id: callId });
     emitToUser(call.calleeId, 'call:timeout', { call_id: callId });
@@ -164,13 +173,38 @@ function initSocket(io, db) {
         return socket.emit('call:error', { message: 'شما در حال حاضر در یک تماس دیگر هستید.' });
       }
 
-      const callee = db.prepare('SELECT id, username, display_name, avatar_file_id, status FROM users WHERE id = ?').get(calleeId);
-      if (!callee || callee.status === 'banned') {
+      const caller = db.prepare('SELECT id, username, display_name, avatar_file_id, status, banned_until, is_special FROM users WHERE id = ?').get(callerId);
+      if (!caller || caller.status === 'banned' || caller.status === 'rejected' || (caller.status === 'temp_banned' && caller.banned_until > Date.now()) || caller.status === 'pending') {
+        return socket.emit('call:error', { message: 'شما دسترسی به برقراری تماس را ندارید.' });
+      }
+
+      const callee = db.prepare('SELECT id, username, display_name, avatar_file_id, status, banned_until, is_special FROM users WHERE id = ?').get(calleeId);
+      if (!callee || callee.status === 'banned' || callee.status === 'rejected' || (callee.status === 'temp_banned' && callee.banned_until > Date.now()) || callee.status === 'pending') {
         return socket.emit('call:error', { message: 'کاربر مورد نظر در دسترس نیست.' });
       }
 
       if (callee.username === 'safir') {
         return socket.emit('call:error', { message: 'امکان برقراری تماس صوتی با ربات پشتیبان وجود ندارد.' });
+      }
+
+      // بررسی چت و عضویت
+      const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+      if (!chat || chat.type !== 'private' || chat.is_saved) {
+        return socket.emit('call:error', { message: 'تماس صوتی فقط در گفتگوهای دو‌نفره ممکن است.' });
+      }
+      const memberCaller = db.prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?').get(chatId, callerId);
+      const memberCallee = db.prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?').get(chatId, calleeId);
+      if (!memberCaller || !memberCallee) {
+        return socket.emit('call:error', { message: 'طرفین در این گفتگو عضویت ندارند.' });
+      }
+
+      // بررسی مرز دسته‌بندی
+      const { getUserCategoryIds } = require('./db');
+      const callerCats = getUserCategoryIds(callerId);
+      const calleeCats = getUserCategoryIds(calleeId);
+      const shareCat = callerCats.some((cid) => calleeCats.includes(cid));
+      if (!caller.is_special && !callee.is_special && callee.username !== 'safir' && !shareCat) {
+        return socket.emit('call:error', { message: 'برقراری تماس بین دسته‌بندی‌های شما مجاز نیست.' });
       }
 
       // بررسی مسدودی
@@ -186,14 +220,6 @@ function initSocket(io, db) {
         return;
       }
 
-      // بررسی آنلاین بودن
-      if (!isOnline(calleeId)) {
-        socket.emit('call:offline', { callee_id: calleeId, message: 'کاربر در حال حاضر آنلاین نیست.' });
-        recordCallLog(chatId, callerId, calleeId, '📞 تماس از دست رفته (کاربر آفلاین)');
-        return;
-      }
-
-      const caller = db.prepare('SELECT id, username, display_name, avatar_file_id FROM users WHERE id = ?').get(callerId);
       const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
       // مهلت ۴۵ ثانیه‌ای زنگ خوردن
@@ -205,6 +231,8 @@ function initSocket(io, db) {
         id: callId,
         callerId,
         calleeId,
+        callerSocketId: socket.id,
+        calleeSocketId: null,
         chatId,
         status: 'ringing',
         startTime: null,
@@ -215,17 +243,41 @@ function initSocket(io, db) {
       userCallMap.set(callerId, callId);
       userCallMap.set(calleeId, callId);
 
-      // اطلاع‌رسانی به مخاطب
-      emitToUser(calleeId, 'call:incoming', {
-        call_id: callId,
-        chat_id: chatId,
-        caller: {
-          id: caller.id,
-          display_name: caller.display_name,
-          username: caller.username,
-          avatar_url: caller.avatar_file_id ? `/api/files/${caller.avatar_file_id}` : null,
+      // اطلاع‌رسانی به مخاطب در صورت باز بودن سوکت
+      if (isOnline(calleeId)) {
+        emitToUser(calleeId, 'call:incoming', {
+          call_id: callId,
+          chat_id: chatId,
+          caller: {
+            id: caller.id,
+            display_name: caller.display_name,
+            username: caller.username,
+            avatar_url: caller.avatar_file_id ? `/api/files/${caller.avatar_file_id}` : null,
+          }
+        });
+      }
+
+      // ارسال پوش‌نوتیفیکیشن با اولویت بالا برای زنگ خوردن گوشی در حالت آفلاین یا پس‌زمینه
+      sendPushToUser(db, calleeId, {
+        title: `📞 تماس صوتی از ${caller.display_name}`,
+        body: 'در حال زنگ خوردن... برای پاسخ لمس کنید',
+        icon: caller.avatar_file_id ? `/api/files/${caller.avatar_file_id}` : '/icons/icon-192.png',
+        badge: '/icons/icon-192.png',
+        tag: `incoming-call-${callId}`,
+        renotify: true,
+        type: 'incoming_call',
+        callId: callId,
+        chatId: chatId,
+        callerId: callerId,
+        callerName: caller.display_name,
+        callerAvatar: caller.avatar_file_id ? `/api/files/${caller.avatar_file_id}` : null,
+        data: {
+          url: `/#c=${chatId}&call=${callId}`,
+          chatId: chatId,
+          callId: callId,
+          type: 'incoming_call'
         }
-      });
+      }, { TTL: 45, urgency: 'high' });
 
       // تأیید آغاز زنگ برای تماس‌گیرنده
       socket.emit('call:ringing', {
@@ -251,6 +303,17 @@ function initSocket(io, db) {
       }
       call.status = 'connected';
       call.startTime = Date.now();
+      call.calleeSocketId = socket.id;
+
+      // قطع زنگ در سایر تب‌های احتمالی مخاطب
+      emitToUser(call.calleeId, 'call:dismiss-incoming', { call_id });
+
+      // بستن اعلان زنگ در پس‌زمینه
+      sendPushToUser(db, call.calleeId, {
+        type: 'cancel_call',
+        callId: call_id,
+        tag: `incoming-call-${call_id}`
+      }, { TTL: 10, urgency: 'high' });
 
       emitToUser(call.callerId, 'call:accepted', { call_id });
       socket.emit('call:connected', { call_id });
@@ -269,6 +332,16 @@ function initSocket(io, db) {
       activeCalls.delete(call_id);
       userCallMap.delete(call.callerId);
       userCallMap.delete(call.calleeId);
+
+      // قطع زنگ در سایر تب‌های مخاطب
+      emitToUser(call.calleeId, 'call:dismiss-incoming', { call_id });
+
+      // بستن اعلان زنگ در پس‌زمینه
+      sendPushToUser(db, call.calleeId, {
+        type: 'cancel_call',
+        callId: call_id,
+        tag: `incoming-call-${call_id}`
+      }, { TTL: 10, urgency: 'high' });
 
       const otherId = (call.callerId === userId) ? call.calleeId : call.callerId;
       emitToUser(otherId, 'call:rejected', { call_id, reason });
@@ -304,6 +377,13 @@ function initSocket(io, db) {
       userCallMap.delete(call.callerId);
       userCallMap.delete(call.calleeId);
 
+      // اگر در مرحله زنگ خوردن پایان یافت، اعلان در پس‌زمینه لغو شود
+      sendPushToUser(db, call.calleeId, {
+        type: 'cancel_call',
+        callId: call_id,
+        tag: `incoming-call-${call_id}`
+      }, { TTL: 10, urgency: 'high' });
+
       const otherId = (call.callerId === userId) ? call.calleeId : call.callerId;
       emitToUser(otherId, 'call:ended', { call_id, duration, ended_by: userId });
       socket.emit('call:ended', { call_id, duration, ended_by: userId });
@@ -321,44 +401,50 @@ function initSocket(io, db) {
     });
 
     socket.on('disconnect', () => {
+      const set = socketsByUser.get(userId);
+      if (set) {
+        set.delete(socket.id);
+      }
+      const hasRemainingSockets = set && set.size > 0;
+
       // بررسی تماس در حال انجام کاربر قطع‌شده
       if (userCallMap.has(userId)) {
         const callId = userCallMap.get(userId);
         const call = activeCalls.get(callId);
         if (call) {
-          if (call.timeoutId) clearTimeout(call.timeoutId);
-          const duration = call.startTime ? Math.floor((Date.now() - call.startTime) / 1000) : 0;
-          const wasConnected = call.status === 'connected';
-          const otherId = (call.callerId === userId) ? call.calleeId : call.callerId;
+          const isCallSocket = (call.callerSocketId === socket.id || call.calleeSocketId === socket.id);
+          // اگر سوکت فعال در تماس قطع شده باشد یا کاربر دیگر هیچ اتصالی نداشته باشد
+          if (isCallSocket || !hasRemainingSockets) {
+            if (call.timeoutId) clearTimeout(call.timeoutId);
+            const duration = call.startTime ? Math.floor((Date.now() - call.startTime) / 1000) : 0;
+            const wasConnected = call.status === 'connected';
+            const otherId = (call.callerId === userId) ? call.calleeId : call.callerId;
 
-          activeCalls.delete(callId);
-          userCallMap.delete(call.callerId);
-          userCallMap.delete(call.calleeId);
+            activeCalls.delete(callId);
+            userCallMap.delete(call.callerId);
+            userCallMap.delete(call.calleeId);
 
-          emitToUser(otherId, 'call:ended', { call_id: callId, duration, reason: 'disconnected' });
+            emitToUser(otherId, 'call:ended', { call_id: callId, duration, reason: 'disconnected' });
 
-          if (wasConnected && duration > 0) {
-            const mins = Math.floor(duration / 60);
-            const secs = duration % 60;
-            const timeStr = mins > 0 ? `${mins} دقیقه و ${secs} ثانیه` : `${secs} ثانیه`;
-            recordCallLog(call.chatId, call.callerId, call.calleeId, `📞 تماس صوتی (${timeStr})`);
-          } else {
-            recordCallLog(call.chatId, call.callerId, call.calleeId, '📞 تماس صوتی قطع شد');
+            if (wasConnected && duration > 0) {
+              const mins = Math.floor(duration / 60);
+              const secs = duration % 60;
+              const timeStr = mins > 0 ? `${mins} دقیقه و ${secs} ثانیه` : `${secs} ثانیه`;
+              recordCallLog(call.chatId, call.callerId, call.calleeId, `📞 تماس صوتی (${timeStr})`);
+            } else {
+              recordCallLog(call.chatId, call.callerId, call.calleeId, '📞 تماس صوتی قطع شد');
+            }
           }
         }
       }
 
-      const set = socketsByUser.get(userId);
-      if (set) {
-        set.delete(socket.id);
-        if (set.size === 0) {
-          socketsByUser.delete(userId);
-          const ts = Date.now();
-          db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(ts, userId);
-          const u = db.prepare('SELECT privacy_last_seen FROM users WHERE id = ?').get(userId);
-          const hideLastSeen = u && u.privacy_last_seen === 'nobody';
-          io.emit('presence', { user_id: userId, online: false, last_seen_at: hideLastSeen ? null : ts });
-        }
+      if (set && set.size === 0) {
+        socketsByUser.delete(userId);
+        const ts = Date.now();
+        db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(ts, userId);
+        const u = db.prepare('SELECT privacy_last_seen FROM users WHERE id = ?').get(userId);
+        const hideLastSeen = u && u.privacy_last_seen === 'nobody';
+        io.emit('presence', { user_id: userId, online: false, last_seen_at: hideLastSeen ? null : ts });
       }
       if (token) {
         const tokenSet = socketsByToken.get(token);
@@ -370,7 +456,54 @@ function initSocket(io, db) {
     });
   });
 
-  return { emitToUser, isOnline, disconnectSession, disconnectUser, setPostServiceMessage };
+  function terminateUserCall(targetUserId, reason = 'terminated') {
+    if (userCallMap.has(targetUserId)) {
+      const callId = userCallMap.get(targetUserId);
+      const call = activeCalls.get(callId);
+      if (call) {
+        if (call.timeoutId) clearTimeout(call.timeoutId);
+        const otherId = (call.callerId === targetUserId) ? call.calleeId : call.callerId;
+        activeCalls.delete(callId);
+        userCallMap.delete(call.callerId);
+        userCallMap.delete(call.calleeId);
+        emitToUser(otherId, 'call:ended', { call_id: callId, duration: 0, reason });
+        emitToUser(targetUserId, 'call:ended', { call_id: callId, duration: 0, reason });
+      }
+    }
+  }
+
+  function rejectCallById(callId, userId, reason = 'declined') {
+    const call = activeCalls.get(callId);
+    if (!call) return false;
+    if (userId && call.callerId !== userId && call.calleeId !== userId) return false;
+
+    if (call.timeoutId) {
+      clearTimeout(call.timeoutId);
+      call.timeoutId = null;
+    }
+    activeCalls.delete(callId);
+    userCallMap.delete(call.callerId);
+    userCallMap.delete(call.calleeId);
+
+    // قطع زنگ در تمام تب‌های مخاطب
+    emitToUser(call.calleeId, 'call:dismiss-incoming', { call_id: callId });
+
+    // لغو نوتیفیکیشن زنگ در پس‌زمینه
+    sendPushToUser(db, call.calleeId, {
+      type: 'cancel_call',
+      callId: callId,
+      tag: `incoming-call-${callId}`
+    }, { TTL: 10, urgency: 'high' });
+
+    const otherId = (call.callerId === userId) ? call.calleeId : call.callerId;
+    emitToUser(otherId, 'call:rejected', { call_id: callId, reason });
+
+    const logText = (userId === call.callerId) ? '📞 تماس لغو شد' : '📞 تماس صوتی رد شد';
+    recordCallLog(call.chatId, call.callerId, call.calleeId, logText);
+    return true;
+  }
+
+  return { emitToUser, isOnline, disconnectSession, disconnectUser, setPostServiceMessage, terminateUserCall, rejectCallById };
 }
 
 module.exports = { initSocket };

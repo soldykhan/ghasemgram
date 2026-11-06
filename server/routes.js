@@ -6,7 +6,15 @@ const fs = require('fs');
 const crypto = require('crypto');
 const multer = require('multer');
 
-const { UPLOAD_DIR, ensureSafirBot, ensureOfficialChannel, ensureDefaultCategory } = require('./db');
+const {
+  UPLOAD_DIR,
+  ensureSafirBot,
+  ensureOfficialChannel,
+  ensureDefaultCategory,
+  getUserCategoryIds,
+  getUserCategories,
+  setUserCategories,
+} = require('./db');
 const {
   USERNAME_RE,
   hashPassword,
@@ -54,6 +62,8 @@ module.exports = function createApi(db, sock) {
     if (u.privacy_last_seen === 'nobody' && viewerId && Number(u.id) !== Number(viewerId)) {
       lastSeen = null;
     }
+    const catIds = getUserCategoryIds(u.id);
+    const cats = getUserCategories(u.id);
     return {
       id: Number(u.id),
       username: u.username,
@@ -62,7 +72,10 @@ module.exports = function createApi(db, sock) {
       bio: u.bio || '',
       privacy_last_seen: u.privacy_last_seen || 'everyone',
       status: u.status || 'approved',
-      category_id: u.category_id ? Number(u.category_id) : null,
+      category_id: catIds.length > 0 ? catIds[0] : (u.category_id ? Number(u.category_id) : null),
+      category_ids: catIds,
+      category_name: cats.length > 0 ? cats.map((c) => c.name).join('، ') : null,
+      categories: cats,
       is_special: !!u.is_special,
       banned_until: u.banned_until ? Number(u.banned_until) : null,
       is_safir: u.username === 'safir',
@@ -88,7 +101,10 @@ module.exports = function createApi(db, sock) {
       if (!isModerator(member)) return false;
       if (user.is_special) return true;
       const catId = chat.category_id || (getUserById(chat.created_by)?.category_id);
-      if (catId && Number(user.category_id) !== Number(catId)) return false;
+      if (catId) {
+        const uCats = getUserCategoryIds(user.id);
+        if (!uCats.includes(Number(catId))) return false;
+      }
       return true;
     }
 
@@ -100,7 +116,9 @@ module.exports = function createApi(db, sock) {
       if (!peer) return false;
       if (peer.username === 'safir') return true;
       if (user.is_special || peer.is_special) return true;
-      if (user.category_id && peer.category_id && Number(user.category_id) === Number(peer.category_id)) {
+      const uCats = getUserCategoryIds(user.id);
+      const peerCats = getUserCategoryIds(peer.id);
+      if (uCats.some((cid) => peerCats.includes(cid))) {
         return true;
       }
       return false;
@@ -109,7 +127,10 @@ module.exports = function createApi(db, sock) {
     if (chat.type === 'group') {
       if (user.is_special) return true;
       const catId = chat.category_id || (getUserById(chat.created_by)?.category_id);
-      if (catId && Number(user.category_id) !== Number(catId)) return false;
+      if (catId) {
+        const uCats = getUserCategoryIds(user.id);
+        if (!uCats.includes(Number(catId))) return false;
+      }
       return true;
     }
 
@@ -179,6 +200,7 @@ module.exports = function createApi(db, sock) {
         id: Number(opt.id),
         text: opt.text,
         votes: count,
+        vote_count: count,
         percent,
         chosen: myVotes.includes(Number(opt.id)),
       };
@@ -189,6 +211,7 @@ module.exports = function createApi(db, sock) {
       question: poll.question,
       is_anonymous: !!poll.is_anonymous,
       allows_multiple: !!poll.allows_multiple,
+      is_multiple: !!poll.allows_multiple,
       is_quiz: !!poll.is_quiz,
       correct_option_id: poll.correct_option_id ? Number(poll.correct_option_id) : null,
       closed: !!poll.closed,
@@ -358,11 +381,15 @@ module.exports = function createApi(db, sock) {
         .get(chatId, viewerId);
       if (p) {
         maxPeerRead = Number(p.peer_last_read || 0);
+        const isBlockedByMe = !!db.prepare('SELECT 1 FROM blocked_users WHERE user_id = ? AND blocked_id = ?').get(viewerId, p.id);
+        const isBlockedByPeer = !!db.prepare('SELECT 1 FROM blocked_users WHERE user_id = ? AND blocked_id = ?').get(p.id, viewerId);
         peer = {
           ...userPublic(p, viewerId),
           online: sock.isOnline(p.id),
           last_seen_at: p.last_seen_at,
           last_read_id: maxPeerRead,
+          is_blocked: isBlockedByMe,
+          is_blocked_by_peer: isBlockedByPeer,
         };
       }
     } else if (!isSaved) {
@@ -448,13 +475,16 @@ module.exports = function createApi(db, sock) {
       for (const s of due) {
         db.prepare('DELETE FROM scheduled_messages WHERE id = ?').run(s.id);
         const info = db
-          .prepare('INSERT INTO messages (chat_id, sender_id, text, file_id, reply_to_id, is_silent, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-          .run(s.chat_id, s.sender_id, s.text, s.file_id, s.reply_to_id, s.is_silent, now);
+          .prepare('INSERT INTO messages (chat_id, sender_id, text, file_id, reply_to_id, is_silent, is_voice, topic_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(s.chat_id, s.sender_id, s.text, s.file_id, s.reply_to_id, s.is_silent, s.is_voice || 0, s.topic_id || null, now);
         const msgId = Number(info.lastInsertRowid);
         db.prepare('UPDATE chat_members SET last_read_id = ? WHERE chat_id = ? AND user_id = ?').run(msgId, s.chat_id, s.sender_id);
-        const payload = messagePayload(getMessageFull(msgId));
+        const fullMsg = getMessageFull(msgId);
         const members = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(s.chat_id);
-        for (const m of members) sock.emitToUser(m.user_id, 'message', payload);
+        for (const m of members) sock.emitToUser(m.user_id, 'message', messagePayload(fullMsg, m.user_id));
+        const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(s.chat_id);
+        const sender = getUserById(s.sender_id);
+        if (chat && sender) notifyNewMessage(db, chat, sender, messagePayload(fullMsg, 0));
       }
     } catch {}
   }, 2000);
@@ -489,12 +519,93 @@ module.exports = function createApi(db, sock) {
     db.prepare('DELETE FROM files WHERE id = ?').run(fid);
   }
 
+  // حذف کامل و دائمی کاربر و تمامی پیام‌ها و فایل‌های مرتبط از سرور و دیتابیس
+  function deleteUserCompletely(userId) {
+    const u = getUserById(userId);
+    if (!u) return false;
+    if (u.username === 'safir') throw err(400, 'ربات سفیر قابل حذف نیست.');
+
+    // ۱. قطع تماس و سوکت‌های فعال
+    if (sock && typeof sock.terminateUserCall === 'function') {
+      sock.terminateUserCall(userId, 'user_deleted');
+    }
+    sock.disconnectUser(userId, 'حساب کاربری شما توسط مدیر سیستم به طور دائم از سرور حذف شد.');
+
+    // ۲. پیام‌های زمان‌بندی‌شده
+    db.prepare('DELETE FROM scheduled_messages WHERE sender_id = ?').run(userId);
+
+    // ۳. واکنش‌ها و آرا
+    db.prepare('DELETE FROM message_reactions WHERE user_id = ?').run(userId);
+    db.prepare('DELETE FROM poll_votes WHERE user_id = ?').run(userId);
+
+    // ۴. نشست‌ها و اعلانات
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
+    db.prepare('DELETE FROM push_subscriptions WHERE user_id = ?').run(userId);
+
+    // ۵. مسدودی‌ها و دسته‌بندی‌ها
+    db.prepare('DELETE FROM blocked_users WHERE user_id = ? OR blocked_id = ?').run(userId, userId);
+    db.prepare('DELETE FROM user_categories WHERE user_id = ?').run(userId);
+
+    // ۶. حذف چت‌های خصوصی دونفره این کاربر
+    const privateChats = db.prepare(`
+      SELECT c.id FROM chats c
+      JOIN chat_members cm ON cm.chat_id = c.id
+      WHERE c.type = 'private' AND cm.user_id = ?
+    `).all(userId);
+    for (const pc of privateChats) {
+      deleteChatCompletely(pc.id);
+    }
+
+    // ۷. گروه‌ها و کانال‌های ایجاد شده توسط کاربر: واگذاری مالکیت یا حذف در صورت خالی بودن
+    const ownedChats = db.prepare("SELECT id FROM chats WHERE created_by = ? AND type IN ('group', 'channel')").all(userId);
+    for (const oc of ownedChats) {
+      const nextOwner = db.prepare(`
+        SELECT user_id FROM chat_members
+        WHERE chat_id = ? AND user_id != ?
+        ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, joined_at ASC
+        LIMIT 1
+      `).get(oc.id, userId);
+      if (nextOwner) {
+        db.prepare('UPDATE chats SET created_by = ? WHERE id = ?').run(nextOwner.user_id, oc.id);
+        db.prepare("UPDATE chat_members SET role = 'owner' WHERE chat_id = ? AND user_id = ?").run(oc.id, nextOwner.user_id);
+      } else {
+        deleteChatCompletely(oc.id);
+      }
+    }
+
+    // ۸. عضویت در سایر گفتگوها
+    db.prepare('DELETE FROM chat_members WHERE user_id = ?').run(userId);
+
+    // ۹. پیام‌های ارسالی کاربر در سایر چت‌ها
+    const userMsgFiles = db.prepare('SELECT DISTINCT file_id FROM messages WHERE sender_id = ? AND file_id IS NOT NULL').all(userId);
+    db.prepare('DELETE FROM messages WHERE sender_id = ?').run(userId);
+    for (const r of userMsgFiles) {
+      cleanupFileIfUnused(r.file_id);
+    }
+
+    // ۱۰. فایل‌های آپلود شده توسط این کاربر
+    const userFiles = db.prepare('SELECT id, stored_name FROM files WHERE uploaded_by = ?').all(userId);
+    for (const f of userFiles) {
+      try {
+        const filePath = path.join(UPLOAD_DIR, f.stored_name);
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      } catch {}
+    }
+    db.prepare('DELETE FROM files WHERE uploaded_by = ?').run(userId);
+    if (u.avatar_file_id) cleanupFileIfUnused(u.avatar_file_id);
+
+    // ۱۱. حذف نهایی از جدول users
+    db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+    return true;
+  }
+
   // ایجاد و همگام‌سازی چت‌های خصوصی بین تمام اعضای یک دسته‌بندی
   function ensureCategoryPrivateChats(userId, categoryId) {
     if (!userId || !categoryId) return;
     const catMembers = db.prepare(`
-      SELECT id FROM users
-      WHERE category_id = ? AND status = 'approved' AND id != ? AND username != 'safir'
+      SELECT DISTINCT u.id FROM users u
+      JOIN user_categories uc ON uc.user_id = u.id
+      WHERE uc.category_id = ? AND u.status = 'approved' AND u.id != ? AND u.username != 'safir'
     `).all(categoryId, userId);
 
     if (!catMembers.length) return;
@@ -550,7 +661,11 @@ module.exports = function createApi(db, sock) {
       const cats = db.prepare('SELECT id FROM categories').all();
       db.exec('BEGIN TRANSACTION');
       for (const c of cats) {
-        const members = db.prepare("SELECT id FROM users WHERE category_id = ? AND status = 'approved' AND username != 'safir'").all(c.id);
+        const members = db.prepare(`
+          SELECT DISTINCT u.id FROM users u
+          JOIN user_categories uc ON uc.user_id = u.id
+          WHERE uc.category_id = ? AND u.status = 'approved' AND u.username != 'safir'
+        `).all(c.id);
         for (let i = 0; i < members.length; i++) {
           for (let j = i + 1; j < members.length; j++) {
             const u1 = Number(members[i].id);
@@ -882,9 +997,17 @@ module.exports = function createApi(db, sock) {
           .prepare(`SELECT id, username, display_name, avatar_file_id, category_id, is_special, status FROM users
                     WHERE id != ? AND status = 'approved'
                       AND (? = '' OR username LIKE ? OR display_name LIKE ?)
-                      AND (category_id = ? OR is_special = 1 OR username = 'safir')
+                      AND (
+                        id IN (
+                          SELECT uc2.user_id FROM user_categories uc2
+                          WHERE uc2.category_id IN (SELECT uc1.category_id FROM user_categories uc1 WHERE uc1.user_id = ?)
+                        )
+                        OR category_id = ?
+                        OR is_special = 1
+                        OR username = 'safir'
+                      )
                     ORDER BY display_name LIMIT 200`)
-          .all(req.user.id, q, like, like, req.user.category_id || 0);
+          .all(req.user.id, q, like, like, req.user.id, req.user.category_id || 0);
       }
       res.json({ users: rows.map(userPublic) });
     })
@@ -921,10 +1044,18 @@ module.exports = function createApi(db, sock) {
             JOIN chat_members cm_me ON cm_me.chat_id = c.id AND cm_me.user_id = ?
             WHERE u.id != ? AND c.type = 'private' AND u.status = 'approved'
               AND (? = '' OR u.username LIKE ? OR u.display_name LIKE ?)
-              AND (u.category_id = ? OR u.is_special = 1 OR u.username = 'safir')
+              AND (
+                u.id IN (
+                  SELECT uc2.user_id FROM user_categories uc2
+                  WHERE uc2.category_id IN (SELECT uc1.category_id FROM user_categories uc1 WHERE uc1.user_id = ?)
+                )
+                OR u.category_id = ?
+                OR u.is_special = 1
+                OR u.username = 'safir'
+              )
             ORDER BY u.display_name
           `)
-          .all(req.user.id, req.user.id, q, like, like, req.user.category_id || 0);
+          .all(req.user.id, req.user.id, q, like, like, req.user.id, req.user.category_id || 0);
       }
       res.json({ contacts: rows.map(userPublic) });
     })
@@ -982,9 +1113,17 @@ module.exports = function createApi(db, sock) {
           .prepare(`SELECT id, username, display_name, avatar_file_id, category_id, is_special, status FROM users
                     WHERE id != ? AND status = 'approved'
                       AND (username LIKE ? OR display_name LIKE ?)
-                      AND (category_id = ? OR is_special = 1 OR username = 'safir')
+                      AND (
+                        id IN (
+                          SELECT uc2.user_id FROM user_categories uc2
+                          WHERE uc2.category_id IN (SELECT uc1.category_id FROM user_categories uc1 WHERE uc1.user_id = ?)
+                        )
+                        OR category_id = ?
+                        OR is_special = 1
+                        OR username = 'safir'
+                      )
                     ORDER BY username LIMIT 20`)
-          .all(req.user.id, like, like, req.user.category_id || 0);
+          .all(req.user.id, like, like, req.user.id, req.user.category_id || 0);
       }
       res.json({ users: rows.map(userPublic) });
     })
@@ -1007,15 +1146,16 @@ module.exports = function createApi(db, sock) {
                     ORDER BY is_official DESC, title LIMIT 20`)
           .all(like, like);
       } else {
-        const catId = Number(req.user.category_id || 0);
+        const catIds = getUserCategoryIds(req.user.id);
+        const inClause = catIds.length > 0 ? catIds.map(() => '?').join(',') : '0';
         rows = db
           .prepare(`SELECT id, title, username, about, avatar_file_id, category_id, is_official
                     FROM chats
                     WHERE type = 'channel'
                       AND (username LIKE ? OR title LIKE ?)
-                      AND (? = 0 OR category_id IS NULL OR category_id = ? OR is_official = 1)
+                      AND (category_id IS NULL OR is_official = 1 OR category_id IN (${inClause}))
                     ORDER BY is_official DESC, title LIMIT 20`)
-          .all(like, like, catId, catId);
+          .all(like, like, ...catIds);
       }
       res.json({
         channels: rows.map((c) => ({
@@ -1070,8 +1210,11 @@ module.exports = function createApi(db, sock) {
       // بررسی دسته‌بندی برای گروه‌ها و کانال‌های غیررسمی
       if (!chat.is_official && (chat.type === 'group' || chat.type === 'channel') && !req.user.is_special) {
         const chatCatId = chat.category_id || (getUserById(chat.created_by)?.category_id);
-        if (chatCatId && Number(req.user.category_id) !== Number(chatCatId)) {
-          throw err(403, 'دسترسی به این گفتگو برای دسته‌بندی شما مجاز نیست.');
+        if (chatCatId) {
+          const uCats = getUserCategoryIds(req.user.id);
+          if (!uCats.includes(Number(chatCatId))) {
+            throw err(403, 'دسترسی به این گفتگو برای دسته‌بندی شما مجاز نیست.');
+          }
         }
       }
 
@@ -1109,9 +1252,11 @@ module.exports = function createApi(db, sock) {
       const viewerIsSpecial = !!req.user.is_special;
       const targetIsSpecial = !!target.is_special;
       const targetIsSafir = target.username === 'safir';
-      const sameCategory = req.user.category_id && target.category_id && Number(req.user.category_id) === Number(target.category_id);
+      const uCats = getUserCategoryIds(req.user.id);
+      const targetCats = getUserCategoryIds(target.id);
+      const shareCat = uCats.some((cid) => targetCats.includes(cid));
 
-      if (!viewerIsSpecial && !targetIsSpecial && !targetIsSafir && !sameCategory) {
+      if (!viewerIsSpecial && !targetIsSpecial && !targetIsSafir && !shareCat) {
         throw err(404, 'کاربر پیدا نشد.');
       }
 
@@ -1219,13 +1364,20 @@ module.exports = function createApi(db, sock) {
         memberIds = [];
       }
       memberIds = [...new Set(memberIds)].filter((id) => id !== req.user.id);
-      const chatCat = req.user.category_id || null;
+      const myCatIds = getUserCategoryIds(req.user.id);
+      let chatCat = req.body.category_id ? Number(req.body.category_id) : (myCatIds.length > 0 ? myCatIds[0] : (req.user.category_id || null));
+      if (chatCat && !req.user.is_special && myCatIds.length > 0 && !myCatIds.includes(chatCat)) {
+        chatCat = myCatIds[0];
+      }
       for (const id of memberIds) {
         const u = getUserById(id);
         if (!u) throw err(400, 'یکی از اعضای انتخاب‌شده پیدا نشد.');
         if (!req.user.is_special && !u.is_special && u.username !== 'safir') {
-          if (!chatCat || Number(u.category_id) !== Number(chatCat)) {
-            throw err(400, `کاربر «${u.display_name}» به دلیل عدم تطابق دسته‌بندی امکان افزودن به این گفتگو را ندارد.`);
+          if (chatCat) {
+            const uCats = getUserCategoryIds(u.id);
+            if (!uCats.includes(chatCat)) {
+              throw err(400, `کاربر «${u.display_name}» به دلیل عدم تطابق دسته‌بندی امکان افزودن به این گفتگو را ندارد.`);
+            }
           }
         }
       }
@@ -1455,7 +1607,13 @@ module.exports = function createApi(db, sock) {
     h(async (req, res) => {
       const chatId = Number(req.params.id);
       if (!getMembership(chatId, req.user.id)) throw err(403, 'عضو این گفتگو نیستید.');
-      const minutes = Number(req.body.duration_minutes ?? -1);
+      let minutes = -1;
+      if (req.body.duration_minutes != null) {
+        minutes = Number(req.body.duration_minutes);
+      } else if (req.body.duration_seconds != null) {
+        const secs = Number(req.body.duration_seconds);
+        minutes = secs === -1 ? -1 : secs / 60;
+      }
       const until = minutes === -1 ? -1 : Date.now() + minutes * 60 * 1000;
       db.prepare('UPDATE chat_members SET muted_until = ? WHERE chat_id = ? AND user_id = ?').run(until, chatId, req.user.id);
       res.json({ ok: true, muted_until: until });
@@ -1524,8 +1682,11 @@ module.exports = function createApi(db, sock) {
         const u = getUserById(id);
         if (!u) throw err(400, 'یکی از کاربران پیدا نشد.');
         if (!chat.is_official && !req.user.is_special && !u.is_special && u.username !== 'safir') {
-          if (!chatCat || Number(u.category_id) !== Number(chatCat)) {
-            throw err(400, `کاربر «${u.display_name}» به دلیل عدم تطابق دسته‌بندی امکان عضویت در این گفتگو را ندارد.`);
+          if (chatCat) {
+            const uCats = getUserCategoryIds(u.id);
+            if (!uCats.includes(Number(chatCat))) {
+              throw err(400, `کاربر «${u.display_name}» به دلیل عدم تطابق دسته‌بندی امکان عضویت در این گفتگو را ندارد.`);
+            }
           }
         }
         if (ins.run(chatId, id, now).changes > 0) added.push(id);
@@ -1627,8 +1788,11 @@ module.exports = function createApi(db, sock) {
 
       if (!chat.is_official && (chat.type === 'group' || chat.type === 'channel') && !req.user.is_special) {
         const chatCatId = chat.category_id || (getUserById(chat.created_by)?.category_id);
-        if (chatCatId && Number(req.user.category_id) !== Number(chatCatId)) {
-          throw err(403, 'دسترسی به این گفتگو برای دسته‌بندی شما مجاز نیست.');
+        if (chatCatId) {
+          const uCats = getUserCategoryIds(req.user.id);
+          if (!uCats.includes(Number(chatCatId))) {
+            throw err(403, 'دسترسی به این گفتگو برای دسته‌بندی شما مجاز نیست.');
+          }
         }
       }
 
@@ -1711,12 +1875,22 @@ module.exports = function createApi(db, sock) {
         (req.file && req.file.mimetype && req.file.mimetype.startsWith('audio/'))
       ) ? 1 : 0;
       const topicId = req.body.topic_id ? Number(req.body.topic_id) : null;
-      const scheduledAt = req.body.scheduled_at ? Number(req.body.scheduled_at) : null;
+      let scheduledAt = null;
+      if (req.body.scheduled_at) {
+        const raw = req.body.scheduled_at;
+        const n = Number(raw);
+        if (!Number.isNaN(n) && n > 0) {
+          scheduledAt = n;
+        } else {
+          const parsed = Date.parse(raw);
+          if (!Number.isNaN(parsed) && parsed > 0) scheduledAt = parsed;
+        }
+      }
 
       if (scheduledAt && scheduledAt > Date.now() + 1000) {
         const schedInfo = db
-          .prepare('INSERT INTO scheduled_messages (chat_id, sender_id, text, file_id, reply_to_id, is_silent, scheduled_for, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-          .run(chatId, req.user.id, text || null, fileId, replyToId, isSilent, scheduledAt, Date.now());
+          .prepare('INSERT INTO scheduled_messages (chat_id, sender_id, text, file_id, reply_to_id, is_silent, is_voice, topic_id, scheduled_for, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(chatId, req.user.id, text || null, fileId, replyToId, isSilent, isVoice, topicId, scheduledAt, Date.now());
         return res.json({ scheduled: true, id: Number(schedInfo.lastInsertRowid), scheduled_for: scheduledAt });
       }
 
@@ -1777,8 +1951,12 @@ module.exports = function createApi(db, sock) {
 
       const updatedFull = getMessageFull(msgId);
       const members = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(msg.chat_id);
-      for (const m of members) sock.emitToUser(m.user_id, 'message-edited', messagePayload(updatedFull, m.user_id));
-      res.json(messagePayload(updatedFull, req.user.id));
+      for (const m of members) {
+        const payload = messagePayload(updatedFull, m.user_id);
+        sock.emitToUser(m.user_id, 'message-edited', { chat_id: msg.chat_id, message: payload });
+      }
+      const myPayload = messagePayload(updatedFull, req.user.id);
+      res.json({ ok: true, message: myPayload, ...myPayload });
     })
   );
 
@@ -1830,7 +2008,7 @@ module.exports = function createApi(db, sock) {
       if (options.length < 2 || options.length > 10) throw err(400, 'تعداد گزینه‌ها باید بین ۲ تا ۱۰ باشد.');
 
       const isAnonymous = req.body.is_anonymous ? 1 : 0;
-      const allowsMultiple = req.body.allows_multiple ? 1 : 0;
+      const allowsMultiple = (req.body.allows_multiple || req.body.is_multiple) ? 1 : 0;
       const isQuiz = req.body.is_quiz ? 1 : 0;
       const correctOptionIdx = req.body.correct_option_index != null ? Number(req.body.correct_option_index) : null;
 
@@ -1923,7 +2101,7 @@ module.exports = function createApi(db, sock) {
       const like = `%${q}%`;
       const rows = db
         .prepare(`
-          SELECT m.id, m.chat_id, m.text, m.created_at, u.display_name AS sender_name,
+          SELECT m.id, m.chat_id, m.text, m.created_at, m.sender_id, u.display_name AS sender_name, u.avatar_file_id,
                  c.type AS chat_type, c.title AS chat_title, c.is_saved
           FROM messages m
           JOIN chat_members cm ON cm.chat_id = m.chat_id AND cm.user_id = ?
@@ -1934,15 +2112,25 @@ module.exports = function createApi(db, sock) {
         `)
         .all(req.user.id, like);
 
-      const results = rows.map((r) => ({
-        id: Number(r.id),
-        chat_id: Number(r.chat_id),
-        chat_title: r.is_saved ? 'پیام‌های ذخیره‌شده' : (r.chat_title || r.sender_name),
-        chat_type: r.is_saved ? 'saved' : r.chat_type,
-        sender_name: r.sender_name,
-        text: r.text,
-        created_at: Number(r.created_at),
-      }));
+      const results = rows.map((r) => {
+        const sender = {
+          id: Number(r.sender_id),
+          display_name: r.sender_name,
+          avatar_url: r.avatar_file_id ? fileUrl(r.avatar_file_id) : null,
+        };
+        return {
+          id: Number(r.id),
+          chat_id: Number(r.chat_id),
+          chat_title: r.is_saved ? 'پیام‌های ذخیره‌شده' : (r.chat_title || r.sender_name),
+          chat_type: r.is_saved ? 'saved' : r.chat_type,
+          sender_id: Number(r.sender_id),
+          sender_name: r.sender_name,
+          sender_avatar_url: sender.avatar_url,
+          sender,
+          text: r.text,
+          created_at: Number(r.created_at),
+        };
+      });
       res.json({ messages: results });
     })
   );
@@ -1990,11 +2178,32 @@ module.exports = function createApi(db, sock) {
         `).all(chatId);
       }
 
-      const items = rows.map((r) => ({
-        ...r,
-        url: r.file_id ? fileUrl(r.file_id) : null,
-        link_preview: r.link_preview ? JSON.parse(r.link_preview) : null,
-      }));
+      const items = rows.map((r) => {
+        const fileObj = r.file_id
+          ? {
+              id: Number(r.file_id),
+              name: r.original_name,
+              original_name: r.original_name,
+              mime: r.mime_type,
+              mime_type: r.mime_type,
+              size: Number(r.size || 0),
+              url: fileUrl(r.file_id),
+            }
+          : null;
+        let linkPreview = null;
+        if (r.link_preview) {
+          try {
+            linkPreview = typeof r.link_preview === 'string' ? JSON.parse(r.link_preview) : r.link_preview;
+          } catch {}
+        }
+        return {
+          ...r,
+          id: Number(r.message_id || r.id),
+          file: fileObj,
+          url: fileObj ? fileObj.url : null,
+          link_preview: linkPreview,
+        };
+      });
       res.json({ items });
     })
   );
@@ -2069,11 +2278,11 @@ module.exports = function createApi(db, sock) {
       const fwdMsgId = Number(info.lastInsertRowid);
       db.prepare('UPDATE chat_members SET last_read_id = ? WHERE chat_id = ? AND user_id = ?').run(fwdMsgId, chatId, req.user.id);
 
-      const payload = messagePayload(getMessageFull(fwdMsgId));
+      const fullFwd = getMessageFull(fwdMsgId);
       const members = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(chatId);
-      for (const m of members) sock.emitToUser(m.user_id, 'message', payload);
-      notifyNewMessage(db, chat, req.user, payload);
-      res.json(payload);
+      for (const m of members) sock.emitToUser(m.user_id, 'message', messagePayload(fullFwd, m.user_id));
+      notifyNewMessage(db, chat, req.user, messagePayload(fullFwd, 0));
+      res.json(messagePayload(fullFwd, req.user.id));
     })
   );
 
@@ -2153,7 +2362,7 @@ module.exports = function createApi(db, sock) {
       if (!chat) throw err(404, 'گفتگو، کانال یا لینک دعوت پیدا نشد.');
       if (!chat.is_official && !req.user.is_special) {
         const chatCatId = chat.category_id || (getUserById(chat.created_by)?.category_id);
-        if (chatCatId && Number(req.user.category_id) !== Number(chatCatId)) {
+        if (chatCatId && !getUserCategoryIds(req.user.id).includes(Number(chatCatId))) {
           throw err(403, 'این گفتگو متعلق به دسته‌بندی دیگری است و امکان عضویت ندارید.');
         }
       }
@@ -2184,7 +2393,7 @@ module.exports = function createApi(db, sock) {
       if (!chat) throw err(404, 'گفتگو، کانال یا لینک دعوت پیدا نشد.');
       if (!chat.is_official && !req.user.is_special) {
         const chatCatId = chat.category_id || (getUserById(chat.created_by)?.category_id);
-        if (chatCatId && Number(req.user.category_id) !== Number(chatCatId)) {
+        if (chatCatId && !getUserCategoryIds(req.user.id).includes(Number(chatCatId))) {
           throw err(403, 'این گفتگو متعلق به دسته‌بندی دیگری است و امکان عضویت ندارید.');
         }
       }
@@ -2241,15 +2450,38 @@ module.exports = function createApi(db, sock) {
       if (!fs.existsSync(p)) throw err(404, 'فایل پیدا نشد.');
 
       const stat = fs.statSync(p);
+      const totalSize = stat.size;
+      const range = req.headers.range;
+
       res.setHeader('Content-Type', f.mime_type || 'application/octet-stream');
-      res.setHeader('Content-Length', stat.size);
       res.setHeader('Accept-Ranges', 'bytes');
       const disp = req.query.download ? 'attachment' : 'inline';
       res.setHeader('Content-Disposition', `${disp}; filename*=UTF-8''${encodeURIComponent(f.original_name)}`);
 
-      const stream = fs.createReadStream(p);
-      stream.pipe(res);
-      req.on('close', () => stream.destroy());
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+
+        if (isNaN(start) || start >= totalSize || (parts[1] && end >= totalSize) || start > end) {
+          res.setHeader('Content-Range', `bytes */${totalSize}`);
+          return res.status(416).end();
+        }
+
+        const chunkSize = end - start + 1;
+        res.status(206);
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+        res.setHeader('Content-Length', chunkSize);
+
+        const stream = fs.createReadStream(p, { start, end });
+        stream.pipe(res);
+        req.on('close', () => stream.destroy());
+      } else {
+        res.setHeader('Content-Length', totalSize);
+        const stream = fs.createReadStream(p);
+        stream.pipe(res);
+        req.on('close', () => stream.destroy());
+      }
     })
   );
 
@@ -2495,9 +2727,8 @@ module.exports = function createApi(db, sock) {
   api.get('/admin/users', adminAuth, h(async (req, res) => {
     const q = String(req.query.q || '').trim().toLowerCase();
     let sql = `
-      SELECT u.id, u.username, u.display_name, u.avatar_file_id, u.status, u.banned_until, u.created_at, u.last_seen_at, u.category_id, u.is_special, c.name AS category_name
+      SELECT u.id, u.username, u.display_name, u.avatar_file_id, u.status, u.banned_until, u.created_at, u.last_seen_at, u.category_id, u.is_special
       FROM users u
-      LEFT JOIN categories c ON c.id = u.category_id
       WHERE u.username != 'safir'
     `;
     const params = [];
@@ -2515,14 +2746,19 @@ module.exports = function createApi(db, sock) {
         db.prepare("UPDATE users SET status = 'approved', banned_until = NULL WHERE id = ?").run(u.id);
         status = 'approved';
       }
+      const catList = getUserCategories(u.id);
+      const catIds = catList.map(c => c.id);
+      const catNames = catList.map(c => c.name).join('، ');
       return {
         id: Number(u.id),
         username: u.username,
         display_name: u.display_name,
         avatar_url: fileUrl(u.avatar_file_id),
         status,
-        category_id: u.category_id ? Number(u.category_id) : null,
-        category_name: u.category_name || null,
+        category_id: catIds.length > 0 ? catIds[0] : (u.category_id ? Number(u.category_id) : null),
+        category_ids: catIds,
+        category_name: catNames || null,
+        categories: catList,
         is_special: !!u.is_special,
         banned_until: u.banned_until ? Number(u.banned_until) : null,
         banned_remaining: status === 'temp_banned' && u.banned_until && Number(u.banned_until) > now
@@ -2551,21 +2787,38 @@ module.exports = function createApi(db, sock) {
     });
   }));
 
-  // تایید کاربر توسط ادمین به همراه انتخاب دسته‌بندی
+  // تایید کاربر توسط ادمین به همراه انتخاب یک یا چند دسته‌بندی
   api.post('/admin/users/:id/approve', adminAuth, h(async (req, res) => {
     const targetId = Number(req.params.id);
     const u = getUserById(targetId);
     if (!u) throw err(404, 'کاربر پیدا نشد.');
     if (u.username === 'safir') throw err(400, 'ربات سفیر قابل ویرایش نیست.');
 
-    const categoryId = req.body.category_id ? Number(req.body.category_id) : null;
-    if (!categoryId) {
-      throw err(400, 'لطفاً دسته‌بندی کاربر را برای تایید انتخاب کنید.');
+    let catIds = [];
+    if (Array.isArray(req.body.category_ids) && req.body.category_ids.length > 0) {
+      catIds = req.body.category_ids.map(Number).filter(n => Number.isInteger(n) && n > 0);
+    } else if (req.body.category_id) {
+      catIds = [Number(req.body.category_id)];
     }
-    const cat = db.prepare('SELECT id, name FROM categories WHERE id = ?').get(categoryId);
-    if (!cat) throw err(400, 'دسته‌بندی انتخاب‌شده نامعتبر است.');
 
-    db.prepare("UPDATE users SET status = 'approved', category_id = ?, banned_until = NULL WHERE id = ?").run(categoryId, targetId);
+    if (catIds.length === 0) {
+      const existingCats = getUserCategoryIds(targetId);
+      if (existingCats.length > 0) {
+        catIds = existingCats;
+      } else {
+        const firstCat = db.prepare('SELECT id FROM categories ORDER BY id ASC LIMIT 1').get();
+        if (firstCat) catIds = [firstCat.id];
+      }
+    }
+    if (catIds.length === 0) throw err(400, 'ابتدا باید حداقل یک دسته‌بندی تعریف شود.');
+
+    const placeholders = catIds.map(() => '?').join(',');
+    const validCats = db.prepare(`SELECT id, name FROM categories WHERE id IN (${placeholders})`).all(...catIds);
+    if (validCats.length === 0) throw err(400, 'دسته‌بندی‌های انتخاب شده معتبر نیستند.');
+    const validCatIds = validCats.map(c => c.id);
+
+    setUserCategories(targetId, validCatIds);
+    db.prepare("UPDATE users SET status = 'approved', category_id = ?, banned_until = NULL WHERE id = ?").run(validCatIds[0], targetId);
 
     // عضویت خودکار در کانال رسمی قاسم‌گرام
     const official = ensureOfficialChannel();
@@ -2574,78 +2827,58 @@ module.exports = function createApi(db, sock) {
       sock.emitToUser(targetId, 'chat', chatListItem(official.id, targetId));
     }
 
+    const catNames = validCats.map(c => c.name).join('، ');
     // ربات سفیر پیام تایید را ارسال می‌کند
-    sendSafirBotMessage(targetId, `ادمین حساب شما را در دسته‌بندی «${cat.name}» تایید کرد. به پیام‌رسان قاسم‌گرام خوش آمدید!`);
+    sendSafirBotMessage(targetId, `ادمین حساب شما را در دسته‌بندی «${catNames}» تایید کرد. به پیام‌رسان قاسم‌گرام خوش آمدید!`);
 
     // ارسال رویداد زنده به سوکت کاربر برای فعال‌سازی آنی تمام امکانات
-    sock.emitToUser(targetId, 'user-status-changed', { status: 'approved', category_id: categoryId });
+    sock.emitToUser(targetId, 'user-status-changed', {
+      status: 'approved',
+      category_id: validCatIds[0],
+      category_ids: validCatIds
+    });
 
-    // ایجاد چت خصوصی با تمامی اعضای این دسته‌بندی تا در لیست چت‌ها ظاهر شوند
-    ensureCategoryPrivateChats(targetId, categoryId);
+    // ایجاد چت خصوصی با تمامی اعضای این دسته‌بندی‌ها تا در لیست چت‌ها ظاهر شوند
+    for (const cid of validCatIds) {
+      ensureCategoryPrivateChats(targetId, cid);
+    }
 
-    res.json({ ok: true, message: `کاربر با موفقیت در دسته‌بندی «${cat.name}» تایید شد.` });
+    res.json({ ok: true, message: `کاربر با موفقیت در دسته‌بندی «${catNames}» تایید شد.` });
   }));
 
-  // تغییر دسته‌بندی یک کاربر توسط ادمین
-  api.put('/admin/users/:id/category', adminAuth, h(async (req, res) => {
+  // تغییر دسته‌بندی‌های یک کاربر توسط ادمین
+  api.put(['/admin/users/:id/category', '/admin/users/:id/categories'], adminAuth, h(async (req, res) => {
     const targetId = Number(req.params.id);
     const u = getUserById(targetId);
     if (!u) throw err(404, 'کاربر پیدا نشد.');
     if (u.username === 'safir') throw err(400, 'ربات سفیر قابل ویرایش نیست.');
 
-    const newCatId = Number(req.body.category_id);
-    const cat = db.prepare('SELECT id, name FROM categories WHERE id = ?').get(newCatId);
-    if (!cat) throw err(400, 'دسته‌بندی نامعتبر است.');
-
-    const oldCatId = u.category_id ? Number(u.category_id) : null;
-    if (oldCatId === newCatId) {
-      return res.json({ ok: true, message: 'دسته‌بندی تغییری نکرد.' });
+    let newCatIds = [];
+    if (Array.isArray(req.body.category_ids)) {
+      newCatIds = req.body.category_ids.map(Number).filter(n => Number.isInteger(n) && n > 0);
+    } else if (req.body.category_id != null) {
+      newCatIds = [Number(req.body.category_id)];
     }
+    if (newCatIds.length === 0) throw err(400, 'حداقل یک دسته‌بندی باید انتخاب شود.');
 
-    db.exec('BEGIN');
-    try {
-      // ۱. به‌روزرسانی دسته‌بندی کاربر
-      db.prepare('UPDATE users SET category_id = ? WHERE id = ?').run(newCatId, targetId);
+    const placeholders = newCatIds.map(() => '?').join(',');
+    const validCats = db.prepare(`SELECT id, name FROM categories WHERE id IN (${placeholders})`).all(...newCatIds);
+    if (validCats.length === 0) throw err(400, 'دسته‌بندی‌های انتخاب شده معتبر نیستند.');
+    const validCatIds = validCats.map(c => c.id);
 
-      // ۲. گروه‌ها و کانال‌هایی که کاربر مالک آنهاست: دسته‌بندی گفتگو تغییر کرده و اعضای خارج از دسته‌بندی حذف می‌شوند
-      const ownedChats = db.prepare("SELECT id FROM chats WHERE created_by = ? AND type IN ('group', 'channel') AND is_official = 0").all(targetId);
-      for (const oc of ownedChats) {
-        db.prepare('UPDATE chats SET category_id = ? WHERE id = ?').run(newCatId, oc.id);
-        const badMembers = db.prepare(`
-          SELECT cm.user_id FROM chat_members cm
-          JOIN users mu ON mu.id = cm.user_id
-          WHERE cm.chat_id = ? AND mu.id != ? AND (mu.category_id != ? OR mu.category_id IS NULL) AND mu.is_special = 0 AND mu.username != 'safir'
-        `).all(oc.id, targetId, newCatId);
-        for (const bm of badMembers) {
-          db.prepare('DELETE FROM chat_members WHERE chat_id = ? AND user_id = ?').run(oc.id, bm.user_id);
-          sock.emitToUser(bm.user_id, 'chat-removed', { chat_id: oc.id });
-        }
-      }
-
-      // ۳. گروه‌ها و کانال‌هایی که کاربر عضو عادی آنهاست و متعلق به دسته‌بندی جدید نیستند: کاربر از آنها حذف می‌شود
-      const otherChats = db.prepare(`
-        SELECT c.id FROM chat_members cm
-        JOIN chats c ON c.id = cm.chat_id
-        WHERE cm.user_id = ? AND c.created_by != ? AND c.type IN ('group', 'channel') AND c.is_official = 0
-          AND (c.category_id != ? OR c.category_id IS NULL)
-      `).all(targetId, targetId, newCatId);
-      for (const oc of otherChats) {
-        db.prepare('DELETE FROM chat_members WHERE chat_id = ? AND user_id = ?').run(oc.id, targetId);
-        sock.emitToUser(targetId, 'chat-removed', { chat_id: oc.id });
-        const remaining = db.prepare('SELECT user_id FROM chat_members WHERE chat_id = ?').all(oc.id);
-        for (const rm of remaining) {
-          sock.emitToUser(rm.user_id, 'chat', chatListItem(oc.id, rm.user_id));
-        }
-      }
-
-      db.exec('COMMIT');
-    } catch (e) {
-      db.exec('ROLLBACK');
-      throw e;
-    }
+    setUserCategories(targetId, validCatIds);
+    db.prepare('UPDATE users SET category_id = ? WHERE id = ?').run(validCatIds[0], targetId);
 
     // ارسال رویداد تغییر دسته‌بندی به کاربر
-    sock.emitToUser(targetId, 'user-category-changed', { category_id: newCatId });
+    sock.emitToUser(targetId, 'user-category-changed', {
+      category_id: validCatIds[0],
+      category_ids: validCatIds
+    });
+
+    // ایجاد و اتصال چت‌های خصوصی اعضای دسته‌بندی‌های جدید
+    for (const cid of validCatIds) {
+      ensureCategoryPrivateChats(targetId, cid);
+    }
 
     // به‌روزرسانی وضعیت ارسال پیام (can_send) برای تمامی چت‌های خصوصی کاربر با طرف‌های مقابل
     const privateChats = db.prepare(`
@@ -2663,10 +2896,8 @@ module.exports = function createApi(db, sock) {
       if (itemPeer) sock.emitToUser(pc.peer_id, 'chat', itemPeer);
     }
 
-    // ایجاد و اتصال چت‌های خصوصی اعضای دسته‌بندی جدید
-    ensureCategoryPrivateChats(targetId, newCatId);
-
-    res.json({ ok: true, message: `دسته‌بندی کاربر به «${cat.name}» تغییر یافت و دسترسی‌ها به‌روز شدند.` });
+    const catNames = validCats.map(c => c.name).join('، ');
+    res.json({ ok: true, message: `دسته‌بندی‌های کاربر به «${catNames}» تغییر یافت و دسترسی‌ها به‌روز شدند.` });
   }));
 
   /* ---------------- API های دسته‌بندی‌ها ---------------- */
@@ -2679,12 +2910,54 @@ module.exports = function createApi(db, sock) {
   api.get('/admin/categories', adminAuth, h(async (req, res) => {
     const list = db.prepare(`
       SELECT c.id, c.name, c.description, c.created_at,
-        (SELECT COUNT(*) FROM users u WHERE u.category_id = c.id AND u.status = 'approved') AS user_count,
+        (SELECT COUNT(DISTINCT uc.user_id) FROM user_categories uc JOIN users u ON u.id = uc.user_id WHERE uc.category_id = c.id AND u.status = 'approved') AS user_count,
         (SELECT COUNT(*) FROM chats ch WHERE ch.category_id = c.id AND ch.type IN ('group', 'channel') AND ch.is_official = 0) AS chat_count
       FROM categories c
       ORDER BY c.id ASC
     `).all();
     res.json({ categories: list });
+  }));
+
+  // دریافت لیست کاربران یک دسته‌بندی خاص برای مشاهده در پنل ادمین
+  api.get('/admin/categories/:id/users', adminAuth, h(async (req, res) => {
+    const catId = Number(req.params.id);
+    const cat = db.prepare('SELECT id, name, description FROM categories WHERE id = ?').get(catId);
+    if (!cat) throw err(404, 'دسته‌بندی پیدا نشد.');
+
+    const users = db.prepare(`
+      SELECT u.id, u.username, u.display_name, u.avatar_file_id, u.status, u.is_special, u.banned_until, u.created_at, u.last_seen_at
+      FROM users u
+      JOIN user_categories uc ON uc.user_id = u.id
+      WHERE uc.category_id = ? AND u.username != 'safir'
+      ORDER BY u.display_name ASC
+    `).all(catId);
+
+    const now = Date.now();
+    res.json({
+      category: cat,
+      users: users.map(u => {
+        let status = u.status;
+        if (status === 'temp_banned' && u.banned_until && now >= Number(u.banned_until)) {
+          db.prepare("UPDATE users SET status = 'approved', banned_until = NULL WHERE id = ?").run(u.id);
+          status = 'approved';
+        }
+        const catList = getUserCategories(u.id);
+        return {
+          id: Number(u.id),
+          username: u.username,
+          display_name: u.display_name,
+          avatar_url: fileUrl(u.avatar_file_id),
+          status,
+          is_special: !!u.is_special,
+          category_ids: catList.map(c => c.id),
+          categories: catList,
+          category_name: catList.map(c => c.name).join('، '),
+          banned_until: u.banned_until ? Number(u.banned_until) : null,
+          created_at: Number(u.created_at),
+          last_seen_at: u.last_seen_at ? Number(u.last_seen_at) : null,
+        };
+      })
+    });
   }));
 
   api.post('/admin/categories', adminAuth, h(async (req, res) => {
@@ -2715,7 +2988,7 @@ module.exports = function createApi(db, sock) {
     const id = Number(req.params.id);
     const cat = db.prepare('SELECT id, name FROM categories WHERE id = ?').get(id);
     if (!cat) throw err(404, 'دسته‌بندی پیدا نشد.');
-    const userCount = db.prepare('SELECT COUNT(*) AS c FROM users WHERE category_id = ?').get(id).c;
+    const userCount = db.prepare('SELECT COUNT(DISTINCT user_id) AS c FROM user_categories WHERE category_id = ?').get(id).c;
     if (userCount > 0) {
       throw err(400, `امکان حذف دسته‌بندی وجود ندارد؛ ${userCount} کاربر در این دسته‌بندی قرار دارند. لطفاً ابتدا دسته‌بندی این کاربران را تغییر دهید.`);
     }
@@ -2876,6 +3149,17 @@ module.exports = function createApi(db, sock) {
     res.json({ ok: true, message: 'مسدودیت کاربر برداشته شد.' });
   }));
 
+  // حذف دائم و کامل کاربر از سرور و دیتابیس (جدا از بن)
+  api.delete('/admin/users/:id', adminAuth, h(async (req, res) => {
+    const targetId = Number(req.params.id);
+    const u = getUserById(targetId);
+    if (!u) throw err(404, 'کاربر پیدا نشد.');
+    if (u.username === 'safir') throw err(400, 'ربات سفیر قابل حذف نیست.');
+
+    deleteUserCompletely(targetId);
+    res.json({ ok: true, message: `کاربر @${u.username} و تمامی اطلاعات و فایل‌های آن به طور کامل از دیتابیس و سرور حذف شدند.` });
+  }));
+
   /* ---------------- وب‌پوش (Web Push Notifications) ---------------- */
 
   // دریافت کلید عمومی VAPID
@@ -2939,6 +3223,52 @@ module.exports = function createApi(db, sock) {
 
     res.json({ ok: true, message: `اعلان آزمایشی به ${count} دستگاه شما ارسال شد.` });
   }));
+
+  /* ---------------- مدیریت و کنترل تماس صوتی ---------------- */
+
+  // رد تماس از طریق Service Worker (کلیک روی دکمه رد در اعلان گوشی)
+  api.post('/calls/:id/reject', auth, (req, res) => {
+    const callId = req.params.id;
+    const handled = sock && typeof sock.rejectCallById === 'function'
+      ? sock.rejectCallById(callId, req.user.id, 'declined')
+      : false;
+    res.json({ ok: handled });
+  });
+
+  /* ---------------- تنظیمات تماس صوتی WebRTC P2P ---------------- */
+
+  api.get('/rtc-config', auth, (req, res) => {
+    const iceServers = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun3.l.google.com:19302' },
+      { urls: 'stun:stun4.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      { urls: 'stun:global.stun.twilio.com:3478' },
+    ];
+
+    if (process.env.TURN_URLS) {
+      const turnUrls = process.env.TURN_URLS.split(',').map((u) => u.trim()).filter(Boolean);
+      const turnConfig = { urls: turnUrls };
+      if (process.env.TURN_USERNAME) turnConfig.username = process.env.TURN_USERNAME;
+      if (process.env.TURN_CREDENTIAL) turnConfig.credential = process.env.TURN_CREDENTIAL;
+      iceServers.unshift(turnConfig);
+    }
+
+    const config = {
+      iceServers,
+      iceCandidatePoolSize: 10,
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require',
+    };
+
+    res.json({
+      ok: true,
+      rtc_config: config,
+      ...config,
+    });
+  });
 
   /* ---------------- مدیریت خطا ---------------- */
 

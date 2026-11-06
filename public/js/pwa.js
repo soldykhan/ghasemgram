@@ -66,7 +66,9 @@
         navigator.serviceWorker.addEventListener('message', (event) => {
           if (event.data && event.data.type === 'NAVIGATE_CHAT' && event.data.chatId) {
             console.log('[PWA] هدایت به چت از طریق کلیک روی اعلان:', event.data.chatId);
-            if (typeof selectChat === 'function') {
+            if (typeof openChat === 'function') {
+              openChat(event.data.chatId);
+            } else if (typeof selectChat === 'function') {
               selectChat(event.data.chatId);
             }
           }
@@ -377,7 +379,55 @@
       });
     }
 
+    // بنر فعال‌سازی اعلان‌ها بالای صفحه
+    const banner = document.getElementById('push-permission-banner');
+    const btnEnable = document.getElementById('ppb-enable-btn');
+    const btnDismiss = document.getElementById('ppb-dismiss-btn');
+
+    function checkPushBanner() {
+      if (!banner) return;
+      if (!('Notification' in window) || !('PushManager' in window)) return;
+      if (sessionStorage.getItem('ppb_dismissed') === '1') return;
+
+      if (Notification.permission === 'default') {
+        banner.classList.remove('hidden');
+      } else {
+        banner.classList.add('hidden');
+      }
+    }
+
+    if (btnEnable) {
+      btnEnable.addEventListener('click', async () => {
+        btnEnable.disabled = true;
+        try {
+          await subscribePush();
+          banner?.classList.add('hidden');
+          if (typeof showToast === 'function') {
+            showToast('🔔 دریافت اعلان‌های تماس و پیام با موفقیت فعال شد.');
+          }
+        } catch (err) {
+          alert('خطا در فعال‌سازی اعلان: ' + err.message);
+        } finally {
+          btnEnable.disabled = false;
+        }
+      });
+    }
+
+    if (btnDismiss) {
+      btnDismiss.addEventListener('click', () => {
+        sessionStorage.setItem('ppb_dismissed', '1');
+        banner?.classList.add('hidden');
+      });
+    }
+
+    window.pwa = {
+      subscribePush,
+      unsubscribePush,
+      checkPushBanner
+    };
+
     updateInstallUI();
     updateNotificationUI();
+    setTimeout(checkPushBanner, 1000);
   });
 })();

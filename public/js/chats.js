@@ -116,12 +116,15 @@ function renderSidebar() {
   // نتایج جستجوی پیام‌ها در سراسر برنامه (Global Message Search)
   if (q && state.searchMessages.length) {
     html += `<div class="section-label">پیام‌ها (${faNum(state.searchMessages.length)})</div>`;
-    html += state.searchMessages.map((m) => `
+    html += state.searchMessages.map((m) => {
+      const sender = m.sender || { id: m.sender_id || m.chat_id, display_name: m.sender_name || m.chat_title };
+      const displayName = m.chat_title || (m.sender && m.sender.display_name) || m.sender_name || 'کاربر';
+      return `
       <div class="chat-item search-msg-item" data-chat-id="${m.chat_id}" data-msg-id="${m.id}">
-        ${avatarHTML(m.sender)}
+        ${avatarHTML(sender)}
         <div class="ci-main">
           <div class="ci-row">
-            <span class="ci-name">${esc(m.chat_title || m.sender.display_name)}</span>
+            <span class="ci-name">${esc(displayName)}</span>
             <span class="ci-time">${listTime(m.created_at)}</span>
           </div>
           <div class="ci-row">
@@ -129,7 +132,8 @@ function renderSidebar() {
           </div>
         </div>
       </div>
-    `).join('');
+    `;
+    }).join('');
   }
 
   const listEl = $('#chat-list');
@@ -231,7 +235,11 @@ function chatMenuItems(c) {
 
 async function muteChat(c, durationSeconds) {
   try {
-    await api(`/chats/${c.id}/mute`, { method: 'POST', body: { duration_seconds: durationSeconds } });
+    const durationMinutes = durationSeconds === -1 ? -1 : Math.round(durationSeconds / 60);
+    await api(`/chats/${c.id}/mute`, {
+      method: 'POST',
+      body: { duration_seconds: durationSeconds, duration_minutes: durationMinutes }
+    });
     c.is_muted = true;
     showToast('گفتگو بی‌صدا شد 🔕');
     renderSidebar();
@@ -864,8 +872,10 @@ async function loadSharedMedia(type) {
       box.innerHTML = `
         <div class="sm-grid">
           ${items.map((m) => {
-            const url = furl(m.file.id);
-            if (m.file.mime.startsWith('image/')) {
+            const f = m.file || { id: m.file_id, mime: m.mime_type || '', name: m.original_name || '', size: m.size || 0 };
+            if (!f || !f.id) return '';
+            const url = furl(f.id);
+            if (f.mime && f.mime.startsWith('image/')) {
               return `<img src="${esc(url)}" class="sm-thumb" loading="lazy" onclick="openLightbox('${esc(url)}')">`;
             }
             return `<video src="${esc(url)}" class="sm-thumb" controls preload="metadata"></video>`;
@@ -873,23 +883,29 @@ async function loadSharedMedia(type) {
         </div>
       `;
     } else if (type === 'files') {
-      box.innerHTML = items.map((m) => `
-        <a class="file-card sm-file-row" href="${esc(furl(m.file.id))}&download=1" download="${esc(m.file.name)}">
+      box.innerHTML = items.map((m) => {
+        const f = m.file || { id: m.file_id, mime: m.mime_type || '', name: m.original_name || '', size: m.size || 0 };
+        if (!f || !f.id) return '';
+        return `
+        <a class="file-card sm-file-row" href="${esc(furl(f.id))}&download=1" download="${esc(f.name)}">
           <span class="file-icon">${ICONS.file}</span>
           <span class="file-info">
-            <span class="file-name">${esc(m.file.name)}</span>
-            <span class="file-size">${fmtSize(m.file.size)} · ${listTime(m.created_at)}</span>
+            <span class="file-name">${esc(f.name)}</span>
+            <span class="file-size">${fmtSize(f.size)} · ${listTime(m.created_at)}</span>
           </span>
           <span class="file-dl">${ICONS.download}</span>
-        </a>
-      `).join('');
+        </a>`;
+      }).join('');
     } else if (type === 'audio') {
-      box.innerHTML = items.map((m) => `
+      box.innerHTML = items.map((m) => {
+        const f = m.file || { id: m.file_id, mime: m.mime_type || '', name: m.original_name || '', size: m.size || 0 };
+        if (!f || !f.id) return '';
+        return `
         <div class="sm-audio-row">
-          ${voicePlayerHTML(m, m.file)}
+          ${voicePlayerHTML(m, f)}
           <span class="sm-audio-date">${listTime(m.created_at)}</span>
-        </div>
-      `).join('');
+        </div>`;
+      }).join('');
       bindVoicePlayers(box);
     } else if (type === 'links') {
       box.innerHTML = items.map((m) => linkPreviewHTML(m.link_preview)).join('');

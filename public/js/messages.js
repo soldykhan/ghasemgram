@@ -108,15 +108,17 @@ function pollHTML(poll) {
   if (!poll) return '';
   const totalVotes = poll.total_votes || 0;
   const isVoted = (poll.my_votes || []).length > 0;
+  const isMulti = !!(poll.allows_multiple || poll.is_multiple);
   const optionsHTML = (poll.options || []).map((opt) => {
     const isMyPick = (poll.my_votes || []).includes(opt.id);
-    const pct = totalVotes > 0 ? Math.round((opt.vote_count / totalVotes) * 100) : 0;
+    const votes = opt.votes ?? opt.vote_count ?? 0;
+    const pct = totalVotes > 0 ? Math.round((votes / totalVotes) * 100) : 0;
     return `
     <div class="poll-option${isMyPick ? ' voted' : ''}" data-poll-id="${poll.id}" data-opt-id="${opt.id}">
       <div class="poll-opt-bar" style="width: ${pct}%"></div>
       <div class="poll-opt-content">
         <span class="poll-opt-text">${isMyPick ? '✓ ' : ''}${esc(opt.text)}</span>
-        <span class="poll-opt-pct">${faNum(pct)}٪ (${faNum(opt.vote_count)})</span>
+        <span class="poll-opt-pct">${faNum(pct)}٪ (${faNum(votes)})</span>
       </div>
     </div>`;
   }).join('');
@@ -129,7 +131,7 @@ function pollHTML(poll) {
     </div>
     <div class="poll-meta">
       <span>${poll.is_anonymous ? 'نظرسنجی ناشناس' : 'نظرسنجی عمومی'}</span> · 
-      <span>${poll.is_multiple ? 'امکان انتخاب چند گزینه' : 'تک‌گزینه‌ای'}</span>
+      <span>${isMulti ? 'امکان انتخاب چند گزینه' : 'تک‌گزینه‌ای'}</span>
     </div>
     <div class="poll-options">${optionsHTML}</div>
     <div class="poll-footer">
@@ -162,7 +164,7 @@ async function votePoll(pollId, optionId, retract = false) {
       const msgs = state.messagesByChat.get(state.activeChatId) || [];
       const m = msgs.find((mm) => mm.poll && mm.poll.id === pollId);
       if (m && m.poll) {
-        if (m.poll.is_multiple) {
+        if (m.poll.allows_multiple || m.poll.is_multiple) {
           const current = new Set(m.poll.my_votes || []);
           if (current.has(optionId)) current.delete(optionId);
           else current.add(optionId);
@@ -388,6 +390,16 @@ function bindMessageEvents(root) {
       } catch {
         showToast('تصویر در تصویر پشتیبانی نمی‌شود');
       }
+    });
+  });
+
+  // اسپویلرها (کلیک برای نمایش محتوا)
+  $$('.spoiler', root).forEach((sp) => {
+    if (sp.dataset.bound) return;
+    sp.dataset.bound = '1';
+    sp.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sp.classList.toggle('revealed');
     });
   });
 
@@ -686,7 +698,7 @@ async function sendMessage({ silent = false, scheduledAt = null } = {}) {
       const store = state.messagesByChat.get(chatId);
       if (store) {
         const i = store.findIndex((m) => m.id === editId);
-        if (i >= 0) store[i] = r.message;
+        if (i >= 0) store[i] = r.message || r;
       }
       renderMessages(chatId);
       showToast('پیام ویرایش شد ✅');

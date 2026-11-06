@@ -2056,6 +2056,64 @@ html[dir="ltr"] .settings-drawer-content {
   fill: #34d399;
 }
 
+/* نشانگر کیفیت زنده اتصال تماس P2P */
+.call-quality-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 20px;
+  background: rgba(0, 0, 0, 0.4);
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 500;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  transition: all 0.25s ease;
+}
+.quality-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #34d399;
+  box-shadow: 0 0 6px rgba(52, 211, 153, 0.6);
+  flex-shrink: 0;
+}
+.quality-dot.good {
+  background: #34d399;
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.8);
+}
+.quality-dot.medium {
+  background: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.8);
+}
+.quality-dot.poor {
+  background: #ef4444;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.8);
+}
+
+/* انیمیشن و ویژوالایزر صدای زنده در حین مکالمه */
+.call-avatar-container.is-speaking .call-avatar {
+  border-color: #34d399;
+  box-shadow: 0 0 30px rgba(52, 211, 153, 0.65);
+  transform: scale(1.04);
+  transition: all 0.15s ease;
+}
+.call-voice-meter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 20px;
+  margin-top: 8px;
+}
+.call-voice-bar {
+  width: 4px;
+  height: 6px;
+  border-radius: 2px;
+  background: #34d399;
+  transition: height 0.08s ease, background-color 0.2s ease;
+}
+
 /* ── بدنه تماس و آواتار ── */
 .call-body {
   display: flex;
