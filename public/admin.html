@@ -1356,7 +1356,7 @@
 
         if (token && s.logged_in) {
           currentAdminUsername = s.admin?.username || 'مدیر';
-          showDashboard();
+          await showDashboard();
         } else {
           showView('login');
         }
@@ -1883,14 +1883,6 @@
           </div>
         `;
       }).join('');
-    }
-        });
-        showToast(res.message || 'دسته‌بندی با موفقیت تغییر کرد ✅');
-        await loadUsers($('#user-search-input')?.value.trim() || '');
-        await loadCategories();
-      } catch (err) {
-        showToast(err.message);
-      }
     }
 
     $('#form-create-category')?.addEventListener('submit', async (e) => {
